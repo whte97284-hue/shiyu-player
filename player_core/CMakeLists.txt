@@ -1,5 +1,6 @@
 # 播放器内核静态库:解析 / 入库 / 曲库 / 拼音 / CUE / 增量缓存 / 播放引擎 / 频谱
 add_library(player_core STATIC
+    src/stb_vorbis_impl.cpp
     src/platform_io.cpp
     src/tag_common.cpp
     src/tag_id3_mpeg.cpp

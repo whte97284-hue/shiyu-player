@@ -2,6 +2,12 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// stb_vorbis 必须在 miniaudio.h 之前引入:miniaudio 的 Vorbis 支持是靠
+// STB_VORBIS_INCLUDE_STB_VORBIS_H 这个宏触发的,没有它 MA_HAS_VORBIS 就不会定义,
+// .ogg/.oga 一律返回 MA_INVALID_FILE(看起来像"播放器不支持 OGG")。
+// 实现放在 stb_vorbis_impl.cpp,这里只要声明。
+#define STB_VORBIS_HEADER_ONLY
+#include "../third_party/stb_vorbis.c"
 #define MINIAUDIO_IMPLEMENTATION
 #include "../include/miniaudio.h"
 #include "../include/audio_playback_engine.hpp"
@@ -48,6 +54,9 @@ struct AudioPlaybackEngine::Impl {
 
     // 音频线程私有:当前实际增益 (用于平滑斜坡)
     float gain = 1.0f;
+    // 重建音频设备前先把这个降到 0,让回调在约 30ms 内把样本淡到静音,
+    // 否则 ma_device_uninit 直接丢弃缓冲会在扬声器上"啪"一声(独占模式尤其明显)
+    std::atomic<float> fade{1.0f};
     // 设备实际格式为 16 位时,在 f32 -> s16 截断前加 TPDF 抖动
     bool dither16 = false;
     uint32_t rng = 0x12345678u;
@@ -183,6 +192,7 @@ bool AudioPlaybackEngine::InitDevice(uint32_t sampleRate, uint32_t channels, boo
         return false;
     }
     impl_->device_initialized = true;
+    impl_->gain = 0.0f;   // 新设备从静音开始,由回调的斜坡平滑升上来(避免重建后第一帧跳变)
     impl_->out_rate = impl_->device.sampleRate;
     impl_->out_channels = impl_->device.playback.channels;
     equalizer_.Configure(impl_->out_rate, impl_->out_channels);
@@ -305,7 +315,13 @@ bool AudioPlaybackEngine::OpenFile(const std::wstring& filePath, double startSec
             (AudioTagParser::ParseFile(filePath, meta, po) && meta.sample_rate > 0) ? meta.sample_rate : 0;
         if (srcRate != 0 && srcRate != impl_->out_rate) {
             const uint32_t ch = impl_->out_channels ? impl_->out_channels : 2;
-            if (!InitDevice(srcRate, ch, true)) {
+            // 先把当前输出淡到静音再重建:设备拆除时缓冲里残留的样本会被硬切,
+            // 在独占模式下就是一声爆音。40ms 足够让 30ms 的斜坡走完。
+            impl_->fade.store(0.0f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(40));
+            const bool ok = InitDevice(srcRate, ch, true);
+            impl_->fade.store(1.0f);   // 新设备的 gain 从 0 开始爬升,顺带就是淡入
+            if (!ok) {
                 // 设备不接受这个采样率(极少见):InitDevice 失败时旧设备已经被 uninit 了,
                 // 必须重新建一个,否则后面根本没法播;退回设备原生格式由解码器重采样
                 std::wcerr << L"[WARN] 设备不支持 " << srcRate << L" Hz,回退到设备原生格式" << std::endl;
@@ -514,7 +530,7 @@ void AudioPlaybackEngine::OnAudioFrames(void* pOutput, uint32_t frameCount) {
     if (got > 0) equalizer_.Process(out, got);
 
     // 音量 × ReplayGain:按样本线性斜坡逼近目标值,避免拉链噪声
-    const float target = volume_.load() * impl_->Cur().rg;
+    const float target = volume_.load() * impl_->Cur().rg * impl_->fade.load();
     float g = impl_->gain;
     if (!(std::abs(g - 1.0f) < 1e-4f && std::abs(target - 1.0f) < 1e-4f)) {
         const size_t n = static_cast<size_t>(got) * ch;

@@ -1,6 +1,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// 只取声明,实现在 audio_playback_engine.cpp(否则两个编译单元会各生成一份实现)
+#define STB_VORBIS_HEADER_ONLY
+#include "../third_party/stb_vorbis.c"
 #include "../include/miniaudio.h" // 实现在 audio_playback_engine.cpp
 #include "../include/equalizer.hpp"
 #include <algorithm>
