@@ -46,3 +46,4 @@ desktop.ini
 # ---- 测试输出(封面/中间产物) ----
 player_core/test/output_covers/
 player_core/test/player_core/
+_archive/
