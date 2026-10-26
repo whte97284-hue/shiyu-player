@@ -1,0 +1,20 @@
+{
+  "playlists": [
+    {
+      "id": "pl_1791793044733_1002",
+      "name": "我的发烧HiFi试音单",
+      "description": "从 M3U8 文件导入",
+      "created_at": 1791793044,
+      "updated_at": 1791793044,
+      "track_ids": [2, 3, 1]
+    },
+    {
+      "id": "pl_1791793044729_1001",
+      "name": "我的发烧HiFi试音单",
+      "description": "用于测试高解析音频与动效",
+      "created_at": 1791793044,
+      "updated_at": 1791793044,
+      "track_ids": [2, 3, 1]
+    }
+  ]
+}

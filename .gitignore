@@ -1,0 +1,48 @@
+# ---- 构建产物 ----
+b/
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+*.obj
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.exe
+*.dll
+*.qsb
+*.ninja
+.ninja_deps
+.ninja_log
+
+# ---- 日志与临时文件 ----
+*.log
+launch_*.txt
+run_*.txt
+
+# ---- 测试产物(测试音频/缓存/可执行) ----
+player_core/test/ingestion_output/
+player_core/test/*.cache
+player_core/test/*.exe
+player_core/test/*.tmp
+
+# ---- 第三方库的本地备份(升级 miniaudio 时用来对比,不入库) ----
+*.orig_backup
+*.bak
+*.old
+
+# ---- 系统 / 编辑器 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+.idea/
+.vscode/
+*.user
+
+# ---- 工具生成的索引/副本目录 ----
+.tree/
+
+# ---- 测试输出(封面/中间产物) ----
+player_core/test/output_covers/
+player_core/test/player_core/
