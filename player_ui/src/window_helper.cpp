@@ -144,6 +144,7 @@ void WindowHelper::applyHotkeys() {
         // 界面用 registeredMask() 就能提示用户换个键
         if (RegisterHotKey(hwnd, kHotIds[i], spec.mods, spec.vk)) registered_ |= (1 << i);
     }
+    emit hotkeysRegistered();
 #endif
 }
 

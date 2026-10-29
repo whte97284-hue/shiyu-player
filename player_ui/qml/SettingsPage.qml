@@ -742,15 +742,19 @@ Item {
                     spacing: 0
                     Repeater {
                         model: [
-                            { label: qsTr("全局 · 播放 / 暂停"), key: "hotkeyPlayPause" },
-                            { label: qsTr("全局 · 下一首"), key: "hotkeyNext" },
-                            { label: qsTr("全局 · 上一首"), key: "hotkeyPrev" }
+                            { label: qsTr("全局 · 播放 / 暂停"), key: "hotkeyPlayPause", bit: 1 },
+                            { label: qsTr("全局 · 下一首"), key: "hotkeyNext", bit: 2 },
+                            { label: qsTr("全局 · 上一首"), key: "hotkeyPrev", bit: 4 }
                         ]
                         delegate: Item {
                             id: hkRow
                             width: parent.width
                             height: 42
                             property bool rec: false
+                            // 设了键但系统没注册上 = 被别的程序占着。
+                            // 留空(禁用)不算冲突
+                            property bool conflict: (settings[modelData.key] || "").length > 0
+                                                    && !(windowHelper.registeredMask & modelData.bit)
                             Text {
                                 anchors.left: parent.left
                                 anchors.leftMargin: 22
@@ -768,12 +772,14 @@ Item {
                                 height: 28
                                 radius: 8
                                 color: hkRow.rec ? Qt.rgba(1, 0.96, 0.9, 0.14) : Qt.rgba(1, 1, 1, 0.06)
-                                border.width: hkRow.rec ? 1 : 0
-                                border.color: Theme.accent
+                                border.width: hkRow.rec || hkRow.conflict ? 1 : 0
+                                border.color: hkRow.rec ? Theme.accent : "#e5484d"
                                 Text {
                                     anchors.centerIn: parent
-                                    text: hkRow.rec ? qsTr("按下组合键…") : (settings[modelData.key] ? settings[modelData.key] : qsTr("未设置"))
-                                    color: hkRow.rec ? Theme.accent : Theme.text
+                                    text: hkRow.rec ? qsTr("按下组合键…")
+                                          : hkRow.conflict ? qsTr("已被其他程序占用")
+                                          : (settings[modelData.key] ? settings[modelData.key] : qsTr("未设置"))
+                                    color: hkRow.rec ? Theme.accent : hkRow.conflict ? "#e5484d" : Theme.text
                                     font.pixelSize: 12
                                 }
                                 MouseArea {
