@@ -187,6 +187,13 @@ void BoxBlur(QImage& img, int radius) {
 
 } // namespace
 
+// 进后台时释放缩略图缓存。定义在匿名 namespace 外面 —— 成员函数不能在里面定义。
+// 切回来时封面会按需重新解码,翻页可能有一两帧空白,换来的是真金白银的内存。
+void CoverProvider::ClearMemoryCache() {
+    std::lock_guard<std::mutex> lock(g_cacheMutex);
+    MemCache().clear();
+}
+
 CoverProvider::CoverProvider() : QQuickAsyncImageProvider() { pool_.setMaxThreadCount(4); }
 
 QQuickImageResponse* CoverProvider::requestImageResponse(const QString& id, const QSize& requestedSize) {

@@ -129,6 +129,9 @@ public:
     void excludeFiles(const QStringList& paths);
     void includeFiles(const QStringList& paths);
     Q_INVOKABLE void clearExcludedFiles();
+    // 进后台(最小化/托盘)时释放可重建的缓存,并把工作集换出到页面文件。
+    // 只放"能重新算出来"的东西:缩略图缓存 + 工作集,曲库/索引不动。
+    Q_INVOKABLE void releaseMemory();
     void setWatchFolders(bool on);
     bool displayDedupe() const { return displayDedupe_; }
     void setDisplayDedupe(bool on);

@@ -20,6 +20,8 @@ public:
     static QImage LoadTrackCover(const TrackItem& t, int maxEdge);
     static QImage Placeholder(const QString& seed, int edge);
     static QImage BlurSmall(const QImage& src);
+    // 释放缩略图内存缓存(进后台/最小化时调用,回来会按需重新解码)
+    static void ClearMemoryCache();
 
 private:
     QThreadPool pool_;

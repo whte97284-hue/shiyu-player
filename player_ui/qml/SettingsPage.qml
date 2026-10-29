@@ -734,6 +734,110 @@ Item {
             SectionTitle { text: qsTr("快捷键") }
             Panel {
                 order: 7
+                // 全局热键:窗口不在前台也能控制播放。点一下进录制状态,按组合键生效
+                Column {
+                    width: parent.width
+                    topPadding: 6
+                    bottomPadding: 2
+                    spacing: 0
+                    Repeater {
+                        model: [
+                            { label: qsTr("全局 · 播放 / 暂停"), key: "hotkeyPlayPause" },
+                            { label: qsTr("全局 · 下一首"), key: "hotkeyNext" },
+                            { label: qsTr("全局 · 上一首"), key: "hotkeyPrev" }
+                        ]
+                        delegate: Item {
+                            id: hkRow
+                            width: parent.width
+                            height: 42
+                            property bool rec: false
+                            Text {
+                                anchors.left: parent.left
+                                anchors.leftMargin: 22
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.label
+                                color: Theme.textSecondary
+                                font.pixelSize: 13
+                            }
+                            Rectangle {
+                                id: hkBox
+                                anchors.right: parent.right
+                                anchors.rightMargin: 22
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 168
+                                height: 28
+                                radius: 8
+                                color: hkRow.rec ? Qt.rgba(1, 0.96, 0.9, 0.14) : Qt.rgba(1, 1, 1, 0.06)
+                                border.width: hkRow.rec ? 1 : 0
+                                border.color: Theme.accent
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: hkRow.rec ? qsTr("按下组合键…") : (settings[modelData.key] ? settings[modelData.key] : qsTr("未设置"))
+                                    color: hkRow.rec ? Theme.accent : Theme.text
+                                    font.pixelSize: 12
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    onClicked: {
+                                        hkRow.rec = true
+                                        hkRow.forceActiveFocus()
+                                    }
+                                }
+                            }
+                            focus: rec
+                            Keys.onPressed: (e) => {
+                                if (!hkRow.rec) return
+                                // 单独的修饰键不算,等主键按下来再收
+                                if (e.key === Qt.Key_Control || e.key === Qt.Key_Alt ||
+                                    e.key === Qt.Key_Shift || e.key === Qt.Key_Meta) {
+                                    e.accepted = true
+                                    return
+                                }
+                                if (e.key === Qt.Key_Escape) {
+                                    hkRow.rec = false
+                                    e.accepted = true
+                                    return
+                                }
+                                const parts = []
+                                if (e.modifiers & Qt.ControlModifier) parts.push("Ctrl")
+                                if (e.modifiers & Qt.AltModifier) parts.push("Alt")
+                                if (e.modifiers & Qt.ShiftModifier) parts.push("Shift")
+                                if (e.modifiers & Qt.MetaModifier) parts.push("Win")
+                                let name = ""
+                                if (e.key >= Qt.Key_A && e.key <= Qt.Key_Z) name = String.fromCharCode(e.key)
+                                else if (e.key >= Qt.Key_0 && e.key <= Qt.Key_9) name = String.fromCharCode(e.key)
+                                else if (e.key >= Qt.Key_F1 && e.key <= Qt.Key_F24) name = "F" + (e.key - Qt.Key_F1 + 1)
+                                else if (e.key === Qt.Key_Space) name = "Space"
+                                else if (e.key === Qt.Key_Return || e.key === Qt.Key_Enter) name = "Enter"
+                                else if (e.key === Qt.Key_Tab) name = "Tab"
+                                else if (e.key === Qt.Key_Left) name = "Left"
+                                else if (e.key === Qt.Key_Right) name = "Right"
+                                else if (e.key === Qt.Key_Up) name = "Up"
+                                else if (e.key === Qt.Key_Down) name = "Down"
+                                else if (e.key === Qt.Key_Home) name = "Home"
+                                else if (e.key === Qt.Key_End) name = "End"
+                                else if (e.key === Qt.Key_PageUp) name = "PgUp"
+                                else if (e.key === Qt.Key_PageDown) name = "PgDn"
+                                else if (e.key === Qt.Key_Insert) name = "Ins"
+                                else if (e.key === Qt.Key_Delete) name = "Del"
+                                else if (e.key === Qt.Key_MediaPlay) name = "MediaPlayPause"
+                                else if (e.key === Qt.Key_MediaNext) name = "MediaNext"
+                                else if (e.key === Qt.Key_MediaPrevious) name = "MediaPrev"
+                                if (!name) { e.accepted = true; return }
+                                parts.push(name)
+                                settings[modelData.key] = parts.join("+")
+                                hkRow.rec = false
+                                e.accepted = true
+                            }
+                        }
+                    }
+                    // 分隔线:下面是应用内快捷键(固定,不可改)
+                    Rectangle {
+                        width: parent.width
+                        height: 1
+                        color: Qt.rgba(1, 1, 1, 0.07)
+                    }
+                }
                 Grid {
                     id: keys
                     width: parent.width

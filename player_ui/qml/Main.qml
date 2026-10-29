@@ -14,7 +14,26 @@ Window {
     color: Theme.base
     flags: Qt.Window | Qt.FramelessWindowHint
 
-    Component.onCompleted: windowHelper.applyNativeFrame(root)
+    Component.onCompleted: {
+        windowHelper.applyNativeFrame(root)
+        // 全局热键:窗口不在前台也能控制播放。设置页改过之后会重新注册
+        windowHelper.setHotkeys(settings.hotkeyPlayPause, settings.hotkeyNext, settings.hotkeyPrev)
+    }
+
+    Connections {
+        target: settings
+        function onChanged() {
+            windowHelper.setHotkeys(settings.hotkeyPlayPause, settings.hotkeyNext, settings.hotkeyPrev)
+        }
+    }
+
+    // 最小化 / 隐藏到托盘时把能重建的缓存放掉,并把工作集换出到页面文件。
+    // 只动缩略图和已提交的内存,曲库索引、播放队列都保持原样,切回来是瞬间的
+    // (封面会按需重新解码,翻页时可能有一两帧空白)。
+    onVisibilityChanged: {
+        if (visibility === Window.Minimized || visibility === Window.Hidden)
+            Qt.callLater(library.releaseMemory)
+    }
 
     // 强调色跟随当前专辑
     // 强调色:跟随封面,或设置页里选的固定色

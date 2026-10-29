@@ -29,6 +29,10 @@ class SettingsService : public QObject {
     Q_PROPERTY(int lyricsColor READ lyricsColor WRITE setLyricsColor NOTIFY changed)       // 配色序号
     Q_PROPERTY(bool lyricsTwoLine READ lyricsTwoLine WRITE setLyricsTwoLine NOTIFY changed)
     Q_PROPERTY(QPoint lyricsPos READ lyricsPos WRITE setLyricsPos NOTIFY changed)          // (-1,-1) = 屏幕下方居中
+    // 全局热键(窗口不在前台也生效),格式 "Ctrl+Alt+Space" / "F9" / "MediaPlayPause",空 = 禁用
+    Q_PROPERTY(QString hotkeyPlayPause READ hotkeyPlayPause WRITE setHotkeyPlayPause NOTIFY changed)
+    Q_PROPERTY(QString hotkeyNext READ hotkeyNext WRITE setHotkeyNext NOTIFY changed)
+    Q_PROPERTY(QString hotkeyPrev READ hotkeyPrev WRITE setHotkeyPrev NOTIFY changed)
     // ---- 曲库 ----
     Q_PROPERTY(int scanThreads READ scanThreads WRITE setScanThreads NOTIFY changed) // 0 = 自动
     Q_PROPERTY(bool splitCue READ splitCue WRITE setSplitCue NOTIFY changed)
@@ -81,6 +85,13 @@ public:
     bool desktopLyrics() const { return get("lyrics/desktop", false).toBool(); }
     void setDesktopLyrics(bool v) { put("lyrics/desktop", v); }
     bool lyricsLocked() const { return get("lyrics/locked", false).toBool(); }
+
+    QString hotkeyPlayPause() const { return get("hotkeys/playPause", QStringLiteral("MediaPlayPause")).toString(); }
+    QString hotkeyNext() const { return get("hotkeys/next", QStringLiteral("MediaNext")).toString(); }
+    QString hotkeyPrev() const { return get("hotkeys/prev", QStringLiteral("MediaPrev")).toString(); }
+    void setHotkeyPlayPause(const QString& v) { put("hotkeys/playPause", v); }
+    void setHotkeyNext(const QString& v) { put("hotkeys/next", v); }
+    void setHotkeyPrev(const QString& v) { put("hotkeys/prev", v); }
     void setLyricsLocked(bool v) { put("lyrics/locked", v); }
     int lyricsFontSize() const { return get("lyrics/fontSize", 34).toInt(); }
     void setLyricsFontSize(int v) { put("lyrics/fontSize", qBound(20, v, 72)); }

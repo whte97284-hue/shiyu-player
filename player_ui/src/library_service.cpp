@@ -1,4 +1,5 @@
 #include "library_service.h"
+#include "cover_provider.h"
 #include "scan_cache.hpp"
 
 #include <QClipboard>
@@ -307,6 +308,15 @@ void LibraryService::saveFolders() {
     QSettings().setValue("library/excludedFiles", excludedFiles_);
     updateWatcher();
     emit foldersChanged();
+}
+
+void LibraryService::releaseMemory() {
+    CoverProvider::ClearMemoryCache();
+#ifdef Q_OS_WIN
+    // 把工作集换出到页面文件:任务管理器里的数字会明显下降。
+    // 切回来时 Qt 会按需重新解码封面,有轻微延迟,但内存是真释放了。
+    SetProcessWorkingSetSize(GetCurrentProcess(), static_cast<SIZE_T>(-1), static_cast<SIZE_T>(-1));
+#endif
 }
 
 void LibraryService::setDisplayDedupe(bool on) {
