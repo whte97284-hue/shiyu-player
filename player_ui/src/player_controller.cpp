@@ -83,6 +83,14 @@ PlayerController::PlayerController(LibraryService* lib, QObject* parent) : QObje
         emit sleepChanged();
     });
 
+    // 音量:改动后 400ms 落盘一次。拖动滑块会连续触发 setVolume,靠这条定时器合并成一次写注册表
+    volumeSave_.setSingleShot(true);
+    volumeSave_.setInterval(400);
+    connect(&volumeSave_, &QTimer::timeout, this, [this]() {
+        QSettings s;
+        s.setValue("player/volume", volume_); // QSettings 析构时自动 sync
+    });
+
     fade_.setEasingCurve(QEasingCurve::OutCubic);
     connect(&fade_, &QVariantAnimation::valueChanged, this, [this](const QVariant& v) {
         gain_ = v.toDouble();
@@ -273,6 +281,7 @@ void PlayerController::setVolume(double v) {
     applyVolume();
     emit volumeChanged();
     rebuildSignalChain();
+    volumeSave_.start(); // 停手 400ms 后写一次注册表,强杀也不至于丢
 }
 
 void PlayerController::setPlaying(bool p) {

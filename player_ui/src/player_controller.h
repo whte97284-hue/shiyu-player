@@ -389,4 +389,7 @@ private:
         QString tag;
     } lastCleared_;
     QTimer sleepTimer_;        // 每秒刷新剩余时间
+    // 音量改动后延迟落盘 (拖动滑块会连续触发,合并成一次写注册表);
+    // 析构时仍会再写一次,这条只是让崩溃 / 强杀不至于丢掉本次调整
+    QTimer volumeSave_;
 };
