@@ -36,6 +36,25 @@ Item {
         Nav.trackMenu(-1, p.x, p.y, { albumIndex: hero.albumIndex })
     }
 
+    // 一键播放:把当前视图里所有专辑的曲目按显示顺序排进队列,从第一首开始。
+    // 跟着筛选与排序走 —— 筛了「无损」就只播无损专辑,按年份排就按年份顺序播。
+    // 曲目 ID 是逐个专辑取的 (千张专辑约 10~20ms),点一次够用,不值得为它加一个 C++ 批量接口
+    function playAll() {
+        const ids = []
+        for (let r = 0; r < albumModel.count; ++r) {
+            const ai = albumModel.albumAt(r)
+            if (ai < 0) continue
+            const t = library.albumTrackIds(ai)
+            for (let i = 0; i < t.length; ++i) ids.push(t[i])
+        }
+        if (ids.length === 0) return
+        player.shuffle = false
+        // 与专辑详情的主播放键同一套逻辑:默认立即播放;设置里选了「下一首播放 / 加到队列末尾」就照办
+        const r = player.pickTracks(ids, 0, "albums", true)
+        if (r === "play") Nav.toast("play", qsTr("播放全部 %1 首").arg(ids.length))
+        else Nav.picked(r)
+    }
+
     Connections {
         target: library
         function onLibraryChanged() { hero.info = library.albumInfo(hero.albumIndex) }
@@ -316,6 +335,14 @@ Item {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: 18
+            // 一键播放:把当前筛选 / 排序下的所有专辑排进队列
+            Capsule {
+                id: playAllBtn
+                objectName: "playAllBtn"
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("播放全部")
+                onClicked: hero.playAll()
+            }
             // 筛选:选中的用正文色并带一条强调色短线 (与歌曲页的标签同一样式)
             Row {
                 anchors.verticalCenter: parent.verticalCenter
