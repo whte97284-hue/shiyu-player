@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cwctype>
 #include <filesystem>
 #include <cstdio>
 #include <fstream>

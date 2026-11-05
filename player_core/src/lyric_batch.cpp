@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <cwctype>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
