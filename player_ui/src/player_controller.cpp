@@ -333,6 +333,10 @@ void PlayerController::setQueue(std::vector<uint64_t> ids, int start, const QStr
 }
 
 void PlayerController::queueContentChanged() {
+    // 必须取最新快照:setShuffle() 会在这里重排队列并重建模型,而那时 snap_ 可能还是
+    // 「上一张专辑」的快照 —— 队列里装的是当前专辑的 trackId,在旧快照里查不到,
+    // 封面就全变空。典型复现:进专辑页点随机播放,封面丢失。
+    snap_ = lib_->snapshot();
     queueModel_.reset(snap_, queue_, lib_->generation());
     emit queueChanged();
     updateQueueStats(true);
