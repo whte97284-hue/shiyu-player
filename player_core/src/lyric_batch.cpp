@@ -124,6 +124,13 @@ bool FastGet(const std::string& url, std::string& body) {
         }
     }
     WinHttpCloseHandle(req);
+    if (!ok) {
+        // 连接被服务端回收后句柄还留着,不重置的话之后所有发往同一 host 的请求
+        // 都会失败(而且永远不会重建)——批量补全时表现为前几首成功、后面全挂。
+        HINTERNET dead = t.conns[u.host];
+        if (dead) WinHttpCloseHandle(dead);
+        t.conns[u.host] = nullptr;
+    }
     return ok;
 }
 
@@ -215,7 +222,18 @@ std::wstring CoreRaw(const std::wstring& s) {
 
 bool TitleHit(const std::wstring& qt, const std::wstring& ct) {
     if (qt.empty() || ct.empty()) return false;
-    return Norm(qt) == Norm(ct) || Core(qt) == Core(ct);
+    if (Norm(qt) == Norm(ct) || Core(qt) == Core(ct)) return true;
+    // 原来只认完全相等,导致「Adventure アドベンチャー」这类日英双语标题、
+    // 或者带 (Live)/(Remix) 后缀的版本全部匹配失败 —— 日文曲库几乎整片失败。
+    // 放宽成「一方完整包含另一方,且短串占长串 40% 以上」:
+    // 「Adventure」vs「Adventure アドベンチャー」= 47% 命中,
+    // 而「Love」vs「Love Story」= 36% 仍然拒绝,不会乱配。
+    const std::wstring a = Norm(qt), b = Norm(ct);
+    const std::wstring& lo = a.size() <= b.size() ? a : b;
+    const std::wstring& hi = a.size() <= b.size() ? b : a;
+    if (lo.size() >= 2 && hi.find(lo) != std::wstring::npos)
+        return lo.size() * 10 >= hi.size() * 4;
+    return false;
 }
 
 bool ArtistHit(const std::wstring& qa, const std::wstring& ca) {
@@ -551,60 +569,10 @@ std::vector<BatchOutcome> LyricBatch::Run(const std::vector<BatchTrack>& tracks,
                 LyricCandidate picked;
                 int src = 0;
 
-                {
-                    // 关键词太长会搜不到:曲库里有「Bad Apple!! (feat.SEKAI、初音ミク、宵崎奏、
-                    // 朝比奈まふゆ、東雲絵名、暁山瑞希)」这种标题,整串丢给 krcs 直接返回空。
-                    // 先用「歌手 - 去括号标题」,搜不到再退化成只用标题。
-                    // krcs 必须带歌手才认:实测「Bad Apple!!」单搜 0 条,
-                    // 「初音ミク、25時、ナイトコードで。 - Bad Apple!!」能搜到 10 条。
-                    // 所以顺序是「歌手 - 完整标题」→「歌手 - 去括号标题」→ 只标题 → 只去括号标题
-                    const std::wstring cTitle = Clean(t.title);
-                    const std::wstring cArtist = Clean(t.artist);
-                    std::wstring coreTitle = CoreRaw(cTitle);
-                    if (coreTitle.empty()) coreTitle = cTitle;
-                    std::vector<std::wstring> keys;
-                    if (!cArtist.empty()) keys.push_back(cArtist + L" - " + cTitle);
-                    if (!cArtist.empty() && coreTitle != cTitle)
-                        keys.push_back(cArtist + L" - " + coreTitle);
-                    keys.push_back(cTitle);
-                    if (coreTitle != cTitle) keys.push_back(coreTitle);
-                    // 去重,保持顺序
-                    std::vector<std::wstring> uniq;
-                    for (const auto& k : keys)
-                        if (std::find(uniq.begin(), uniq.end(), k) == uniq.end()) uniq.push_back(k);
-                    keys.swap(uniq);
-
-                    std::vector<KrcsCand> cands;
-                    std::string kerr;
-                    bool searched = false;
-                    for (const auto& kw : keys) {
-                        if (KrcsSearch(kw, t.duration_ms, cands, &kerr)) { searched = true; break; }
-                    }
-                    if (searched) {
-                        const int best = PickCand(t, cands);
-                        if (best >= 0) {
-                            LyricCandidate lc;
-                            lc.source = "kugou";
-                            lc.id = cands[best].id;
-                            lc.accesskey = cands[best].accesskey;
-                            lc.title = cands[best].song;
-                            lc.artist = cands[best].singer;
-                            lc.duration_ms = cands[best].duration_ms;
-                            lc.has_synced = true;
-                            std::string ferr;
-                            if (provider.Fetch(lc, doc, &ferr) && doc.kind != RawLyricDoc::Payload::Plain) {
-                                picked = lc;
-                                src = 1;
-                            } else {
-                                r.note = "kugou fast: fetch " + ferr;
-                            }
-                        } else {
-                            r.note = "kugou fast: 0/" + std::to_string(cands.size()) + " title match";
-                        }
-                    } else {
-                        r.note = "kugou fast: " + kerr;
-                    }
-                }
+                // 这里原本还有一条「kugou fast」快路径,用 krcs/search?keyword= 直接搜。
+                // 那个接口早已废弃 —— 返回 200 但 candidates 恒为空,每首歌白跑 4 次请求,
+                // 还把 note 写成 "kugou fast: no candidates",看起来像网络问题。
+                // 统一走 provider 的两段式:songsearch 拿 FileHash,再用 hash 查 krcs。
                 if (src == 0 && TryProviderSource(provider, "kugou", t, doc, picked)) src = 1;
 
                 r.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
