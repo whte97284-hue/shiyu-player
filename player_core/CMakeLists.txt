@@ -24,6 +24,8 @@ add_library(player_core STATIC
     src/equalizer.cpp
     src/lyric_manager.cpp
     src/lyric_provider.cpp
+    src/lyric_batch.cpp
+    src/kgg_decrypt.cpp
     src/playlist_provider.cpp
     src/playlist_matcher.cpp
     src/tinf.cpp

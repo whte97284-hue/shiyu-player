@@ -1,3 +1,8 @@
+#include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <exception>
 #include <QSettings>
 #include <QAbstractItemModel>
 #include <QDir>
@@ -30,6 +35,7 @@
 #include "playlist_importer.h"
 #include "decrypt_service.h"
 #include "cover_service.h"
+#include "lyric_service.h"
 #include "settings_service.h"
 #include "decryptor.hpp"
 #include "window_helper.h"
@@ -771,6 +777,19 @@ static void RunScreenshots(QQmlApplicationEngine& engine, LibraryService& lib, P
         steps->push_back({"p4_next", [&player] { player.next(); player.playAlbum(3, 2); }, 1500});
         steps->push_back({"p5_dedupe_again", [tools, call] { call("automationGo", QStringLiteral("dedupe")); tools()->autoSelect(1); }, 1500});
         steps->push_back({"p6_play_again", [&player] { player.playAlbum(5, 0); }, 1500});
+    } else if (qEnvironmentVariableIsSet("KP_TEST_LYRIC_BATCH")) {
+        // 歌词补全面板:打开 -> 全部补全 -> 等完成 -> 再等一会儿看会不会崩
+        steps->push_back({"y1_open", [call] { call("automationLyricBatchPanel", true); }, 1500});
+        steps->push_back({"y2_run", [call] { call("automationLyricBatchRun"); }, 2500});
+        steps->push_back({"y3_mid", [] {}, 6000});
+        steps->push_back({"y4_done", [] {}, 8000});
+        steps->push_back({"y5_after", [] {}, 4000});
+        steps->push_back({"y6_closed", [call] { call("automationLyricBatchClose"); }, 1200});
+        // 列表大收缩压力测试:400 条假数据 -> 回真实几十条
+        steps->push_back({"y7_open_again", [call] { call("automationLyricBatchPanel", true); }, 900});
+        steps->push_back({"y8_stress", [call] { call("automationLyricBatchStress"); }, 1200});
+        steps->push_back({"y9_shrunk", [] {}, 2500});
+        steps->push_back({"y10_stable", [] {}, 2500});
     } else if (!flowDir.isEmpty()) {
         steps->push_back({"f1_empty", [] {}, 1200});
         steps->push_back({"f2_importing", [&lib, flowDir] { lib.addFolder(flowDir); }, 1100});
@@ -983,7 +1002,40 @@ static void InstallCrashDump() {
 }
 #endif
 
+// 全局 terminate 处理器:任何线程里漏出来的异常都会在这里落盘,
+// 否则只会在事件查看器里看到 libstdc++ 的 0x40000015,什么线索都没有
+static void OnTerminate() {
+    std::string msg = "[fatal] std::terminate";
+    if (auto e = std::current_exception()) {
+        try {
+            std::rethrow_exception(e);
+        } catch (const std::exception& ex) {
+            msg += ": ";
+            msg += ex.what();
+        } catch (...) {
+            msg += ": 非 std::exception 类型";
+        }
+    } else {
+        msg += " (当前无异常 —— 多半是 std::thread 析构时仍 joinable,或 mutex 重复加锁)";
+    }
+    msg += "\n";
+    if (const char* local = std::getenv("LOCALAPPDATA")) {
+        const std::string dir = std::string(local) + "\\KugouPlayer\\KugouPlayer";
+        std::filesystem::create_directories(dir);
+        std::ofstream f(dir + "\\fatal.log", std::ios::app);
+        if (f) {
+            std::time_t t = std::time(nullptr);
+            char buf[64] = {0};
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S ", std::localtime(&t));
+            f << buf << msg;
+        }
+    }
+    std::fprintf(stderr, "%s", msg.c_str());
+    std::abort();
+}
+
 int main(int argc, char* argv[]) {
+    std::set_terminate(OnTerminate);
     QGuiApplication::setHighDpiScaleFactorRoundingPolicy(Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
     QCoreApplication::setOrganizationName("KugouPlayer");
     QCoreApplication::setApplicationName("KugouPlayer"); // 数据目录名,不能改(改了曲库/设置全丢)
@@ -1022,6 +1074,7 @@ int main(int argc, char* argv[]) {
     SearchModel search(&library);
     DecryptService decrypt(&library);
     CoverService covers(&library);
+    LyricService lyrics(&library);
     SettingsService settings(&library);
     ArtistModel artists(&library);
     TrackCollectionModel songs(&library, &playlists);
@@ -1057,6 +1110,7 @@ int main(int argc, char* argv[]) {
     ctx->setContextProperty("playlists", &playlists);
     ctx->setContextProperty("decrypt", &decrypt);
     ctx->setContextProperty("covers", &covers);
+    ctx->setContextProperty("lyrics", &lyrics);
     ctx->setContextProperty("settings", &settings);
     ctx->setContextProperty("artistModel", &artists);
     ctx->setContextProperty("songsModel", &songs);

@@ -211,6 +211,8 @@ Item {
                         height: parent.height
                         radius: 1.5
                         color: Theme.accent
+                        // 光效从 -46 扫到 width，不裁的话会跑到轨道外面去
+                        clip: true
                         width: parent.width * Math.max(0, Math.min(1, covers.progress))
                         // 进度推进要顺滑,但不能拖太久(否则看起来比实际慢)
                         Behavior on width { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }

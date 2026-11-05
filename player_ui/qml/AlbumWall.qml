@@ -193,6 +193,7 @@ Item {
                 onOpenAlbum: (index, coverItem) => wall.openAlbum(index, coverItem)
                 onSortMenu: (anchor) => sortPop.open(anchor)
                 onCoverPanel: (anchor) => coverSheet.openAt(anchor)
+                onLyricPanel: (anchor) => lyricSheet.openAt(anchor)
             }
             // 横幅高度变化 (扫描完成、窗口缩放):用户尚未滚动时停在顶部;已滚动但视口还在横幅范围内时
             // 保持视口相对横幅的位置 (GridView 有时自己挪 contentY、有时不挪,所以按记下的相对位置重设)
@@ -361,6 +362,18 @@ Item {
         id: coverSheet
         bottomInset: wall.bottomInset + 8
     }
+
+    // ---- 歌词补全面板 ----
+    LyricsPanel {
+        id: lyricSheet
+        bottomInset: wall.bottomInset + 8
+    }
+
+    // 自动化入口(测试用)
+    function automationLyricBatchPanel(on) { if (on) lyricSheet.openAt(null); else lyricSheet.close() }
+    function automationLyricBatchRun() { lyricSheet.run() }
+    function automationLyricBatchClose() { lyricSheet.close() }
+    function automationLyricBatchStress() { lyricSheet.automationStress() }
 
     // 截图自动化
     function automationScroll(y) { smooth.stop(); grid.userScrolled = true; grid.contentY = clampY(grid.originY + y) }

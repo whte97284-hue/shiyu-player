@@ -1,4 +1,5 @@
 #include "../include/decryptor.hpp"
+#include "kgg_decrypt.hpp"
 
 #include "../include/audio_tag_parser.hpp"
 #include "../include/cover_fetcher.hpp"
@@ -575,141 +576,49 @@ class KggDecryptor : public Decryptor {
 public:
     EncryptedKind Kind() const override { return EncryptedKind::Kgg; }
     const char* Id() const override { return "kgg"; }
-    std::wstring DisplayName() const override { return L"酷狗 KGG"; } // 酷狗 KGG
-    std::vector<std::wstring> Extensions() const override { return {L".kgg"}; }
-    bool Native() const override { return false; }
-
-    static std::wstring Dir() { return JoinPath(DecryptorRegistry::Instance().ToolsDir(), L"kgg"); }
-    static std::wstring Exe() { return JoinPath(Dir(), L"kgg-dec.exe"); }
+    std::wstring DisplayName() const override { return L"酷狗 KGG"; }
+    std::vector<std::wstring> Extensions() const override {
+        return {L".kgg", L".kgma", L".kgm", L".vpr"};
+    }
+    // 算法已内置,不再依赖 kgg-dec.exe / infra.dll
+    bool Native() const override { return true; }
 
     bool IsAvailable(std::wstring* reason) const override {
 #ifdef _WIN32
-        if (!platform::PathExists(Exe()) || !platform::PathExists(JoinPath(Dir(), L"infra.dll"))) {
-            if (reason) *reason = L"缺少 kgg-dec.exe / infra.dll"; // 缺少 kgg-dec.exe / infra.dll
+        if (kugou::KggDecryptor::FindDatabase().empty()) {
+            if (reason) *reason = L"找不到酷狗密钥库 KGMusicV3.db (需要装过并登录酷狗客户端)";
             return false;
         }
         return true;
 #else
-        if (reason) *reason = L"需要 Windows"; // 需要 Windows
+        if (reason) *reason = L"需要 Windows";
         return false;
 #endif
     }
-    bool Probe(const uint8_t*, size_t) const override { return false; } // 无公开魔数,只按扩展名识别
+    bool Probe(const uint8_t*, size_t) const override { return false; }
 
     DecryptResult Decrypt(const std::wstring& src, const DecryptOptions& opt) const override {
         DecryptResult r;
-        std::wstring why;
-        if (!IsAvailable(&why)) {
-            r.message = why;
-            return r;
-        }
 #ifdef _WIN32
-        static std::atomic<unsigned> counter{0};
-        if (!platform::IsDirectory(opt.output_dir)) platform::CreateDirectories(opt.output_dir);
-        // 在产物目录下的私有工作目录里处理副本:源目录 (可能是只读曲库) 里不产生任何文件
-        std::wstring work = JoinPath(opt.output_dir, L".kgg-work-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-                                                         std::to_wstring(counter.fetch_add(1)));
-        std::error_code ec;
-        fs::remove_all(fs::path(work), ec);
-        platform::CreateDirectories(work);
-        auto cleanup = [&]() { fs::remove_all(fs::path(work), ec); };
-        const std::wstring copy = JoinPath(work, FileNameOf(src));
-        {
-            platform::ReadOnlyFile in;
-            PartWriter w;
-            if (!in.Open(src, false) || !w.Create(copy)) {
-                cleanup();
-                r.message = L"无法复制源文件";
-                return r;
-            }
-            std::vector<uint8_t> buf(kChunk);
-            uint64_t off = 0;
-            while (off < in.Size()) {
-                size_t n = in.ReadAt(off, buf.data(), size_t(std::min<uint64_t>(kChunk, in.Size() - off)));
-                if (n == 0 || !w.Write(buf.data(), n)) break;
-                off += n;
-            }
-            if (off != in.Size() || !w.Commit()) {
-                cleanup();
-                r.message = L"无法复制源文件";
-                return r;
-            }
+        const auto res = kugou::KggDecryptor::Decrypt(src, opt.output_dir);
+        r.ok = res.ok;
+        r.output = res.output;
+        if (!r.ok) {
+            if (res.code == "no-ekey" || res.code == "no-record")
+                r.message = L"酷狗里还没有这首歌的密钥 —— 先在酷狗客户端播放一次再试";
+            else if (res.code == "db")
+                r.message = L"读取酷狗密钥库失败 (需要装过并登录酷狗客户端)";
+            else if (res.code == "unsupported-version")
+                r.message = L"这个文件的加密版本暂不支持: " + AudioTagParser::Utf8ToWide(res.detail);
+            else
+                r.message = AudioTagParser::Utf8ToWide(res.detail);
         }
-
-        std::wstring cmd = L"\"" + Exe() + L"\" \"" + work + L"\"";
-        STARTUPINFOW si{};
-        si.cb = sizeof(si);
-        PROCESS_INFORMATION pi{};
-        std::wstring dir = Dir();
-        if (!CreateProcessW(Exe().c_str(), cmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, dir.c_str(), &si, &pi)) {
-            cleanup();
-            r.message = L"无法启动 kgg-dec.exe";
-            return r;
-        }
-        DWORD waited = 0;
-        bool killed = false;
-        while (WaitForSingleObject(pi.hProcess, 200) == WAIT_TIMEOUT) {
-            waited += 200;
-            if (Cancelled(opt) || waited > 10 * 60 * 1000) {
-                TerminateProcess(pi.hProcess, 1);
-                WaitForSingleObject(pi.hProcess, 2000);
-                killed = true;
-                break;
-            }
-        }
-        CloseHandle(pi.hThread);
-        CloseHandle(pi.hProcess);
-        if (killed) {
-            cleanup();
-            r.message = Cancelled(opt) ? L"已取消" : L"kgg-dec.exe 超时";
-            return r;
-        }
-
-        // 工作目录里出现的音频文件即为产物
-        std::wstring produced, ext;
-        platform::EnumerateFilesRecursive(work, [&](const std::wstring&, const std::vector<platform::DirEntry>& files) {
-            for (const auto& f : files) {
-                std::wstring e = ExtLower(f.name);
-                if (e == L".kgg" || e == L".part" || f.size == 0) continue;
-                platform::ReadOnlyFile pf;
-                uint8_t h[16] = {};
-                if (!pf.Open(f.path, true) || pf.ReadAt(0, h, 16) < 4) continue;
-                std::wstring sniff = SniffExt(h, 16);
-                if (!sniff.empty()) {
-                    produced = f.path;
-                    ext = sniff;
-                    return false;
-                }
-            }
-            return true;
-        });
-        if (produced.empty()) {
-            cleanup();
-            r.message = L"kgg-dec.exe 未产生音频 (本机酷狗密钥库缺失?)"; // 未产生音频 (本机酷狗密钥库缺失?)
-            return r;
-        }
-        r.output = UniqueOutput(opt.output_dir, StemOf(src), ext);
-        if (!platform::AtomicReplaceFile(produced, r.output)) {
-            cleanup();
-            r.output.clear();
-            r.message = L"写入失败";
-            return r;
-        }
-        cleanup();
-        // KGG 解出的 FLAC 没有 PICTURE 块 (kgg-dec 只做纯字节流解密)。
-        // 这里补一次封面:本地算大小/MD5 对酷狗 sqhash,严格匹配优先,歌名兜底。
-        // 失败**不影响**解密结果 —— 拿不到封面就算了,音频本身是好的。
-        {
-            std::string coverErr, coverSrc;
-            cover_core::EnsureCover(r.output, &coverErr, &coverSrc);
-        }
-        r.ok = true;
-        return r;
 #else
         (void)src;
         (void)opt;
-        return r;
+        r.message = L"需要 Windows";
 #endif
+        return r;
     }
 };
 

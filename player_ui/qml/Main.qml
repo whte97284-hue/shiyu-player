@@ -1026,6 +1026,11 @@ Window {
     function automationWallScroll(y) { wall.automationScroll(y) }
     function automationWallSortMenu(on) { wall.automationSortMenu(on) }
     function automationCoverPanel(on) { wall.automationCoverPanel(on) }
+    // 批量补歌词(专辑墙那个面板) —— 别和播放页的 automationLyricPanel 搞混
+    function automationLyricBatchPanel(on) { wall.automationLyricBatchPanel(!!on) }
+    function automationLyricBatchRun() { wall.automationLyricBatchRun() }
+    function automationLyricBatchClose() { wall.automationLyricBatchClose() }
+    function automationLyricBatchStress() { wall.automationLyricBatchStress() }
     function automationCoverRun() { wall.automationCoverRun() }
     function automationCoverPick(i) { wall.automationCoverPick(i) }
     function automationCoverRunAll() { wall.automationCoverRunAll() }
