@@ -24,6 +24,9 @@ struct BatchTrack {
 };
 
 struct BatchOptions {
+    // 匹配精度:0=快速(只认标题精确相等,不降级) 1=标准(片段匹配+40%) 2=精细(30%+双向包含+多源降级)
+    // 越精细越慢:请求数、候选数、降级轮次都跟着涨
+    int precision = 1;
     int threads = 8;
     // 把歌词写成音频旁边的「歌名.lrc」
     bool write_lrc = true;

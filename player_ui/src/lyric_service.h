@@ -35,11 +35,15 @@ class LyricService : public QObject {
     Q_PROPERTY(int threadCount READ threadCount NOTIFY jobChanged)
     // 上一次任务的失败明细:[{title, reason}]
     Q_PROPERTY(QVariantList failures READ failures NOTIFY jobChanged)
+    // 匹配精度 0=快速 1=标准 2=精细(越快越省时间,越精细命中率越高但请求更多)
+    Q_PROPERTY(int precision READ precision WRITE setPrecision NOTIFY precisionChanged)
 
 public:
     explicit LyricService(LibraryService* lib, QObject* parent = nullptr);
     ~LyricService() override;
 
+    int precision() const { return precision_; }
+    void setPrecision(int v);
     bool busy() const { return busy_; }
     double progress() const { return progress_; }
     int done() const { return done_; }
@@ -69,6 +73,7 @@ public:
     Q_INVOKABLE bool hasLrc(double trackId) const;
 
 signals:
+    void precisionChanged();
     void jobChanged();
     void progressChanged();
     void finished(int ok, int failed);
@@ -86,6 +91,7 @@ private:
     void start(std::vector<Job> jobs);
 
     LibraryService* lib_;
+    int precision_ = 1;   // 0 快速 / 1 标准 / 2 精细
     bool busy_ = false;
     double progress_ = 0;
     int done_ = 0;

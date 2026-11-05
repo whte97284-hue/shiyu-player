@@ -456,6 +456,38 @@ Item {
                     elide: Text.ElideRight
                 }
 
+                // 匹配精度:快速只认精确标题、不降级;精细放宽匹配并多源降级
+                Row {
+                    anchors.right: allCap.left
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 1
+                    Repeater {
+                        model: [
+                            { v: 0, t: qsTr("快速") },
+                            { v: 1, t: qsTr("标准") },
+                            { v: 2, t: qsTr("精细") }
+                        ]
+                        delegate: Rectangle {
+                            width: 44
+                            height: 24
+                            radius: 6
+                            color: lyrics.precision === modelData.v ? Qt.rgba(1, 0.96, 0.9, 0.16) : "transparent"
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.t
+                                font.pixelSize: 11
+                                color: lyrics.precision === modelData.v ? Theme.accent : Theme.textSecondary
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                enabled: !root.busy
+                                onClicked: lyrics.precision = modelData.v
+                            }
+                        }
+                    }
+                }
+
                 Capsule {
                     id: allCap
                     anchors.right: parent.right

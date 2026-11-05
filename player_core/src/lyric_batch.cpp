@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "lyric_manager.hpp"
+#include "audio_tag_parser.hpp"
 #include "lyric_provider.hpp"
 #include "platform_io.hpp"
 
@@ -220,19 +221,48 @@ std::wstring CoreRaw(const std::wstring& s) {
     return trim;
 }
 
-bool TitleHit(const std::wstring& qt, const std::wstring& ct) {
+bool TitleHit(const std::wstring& qt, const std::wstring& ct, int precision = 1) {
     if (qt.empty() || ct.empty()) return false;
-    if (Norm(qt) == Norm(ct) || Core(qt) == Core(ct)) return true;
-    // 原来只认完全相等,导致「Adventure アドベンチャー」这类日英双语标题、
-    // 或者带 (Live)/(Remix) 后缀的版本全部匹配失败 —— 日文曲库几乎整片失败。
-    // 放宽成「一方完整包含另一方,且短串占长串 40% 以上」:
-    // 「Adventure」vs「Adventure アドベンチャー」= 47% 命中,
-    // 而「Love」vs「Love Story」= 36% 仍然拒绝,不会乱配。
     const std::wstring a = Norm(qt), b = Norm(ct);
+    if (a == b || Core(qt) == Core(ct)) return true;
+    if (precision <= 0) return false;   // 快速档:只认精确相等,宁可漏也不误配
+
+    // 双语标题里日文部分常常很短:「ai no hana 愛の花」的「愛の花」只占 3/15,
+    // 「Akari 灯」只占 1/7 —— 按整体比例算永远到不了 40%,全被误杀。
+    // 所以先按空格/斜杠把查询标题拆开,任何一段和候选标题完全相等就认。
+    {
+        std::vector<std::wstring> segs;
+        std::wstring cur;
+        for (wchar_t c : a) {
+            if (c == L' ' || c == L'\t' || c == L'/' || c == L'-' || c == L'_' || c == L'~' || c == L'\u00b7') {
+                if (!cur.empty()) { segs.push_back(cur); cur.clear(); }
+            } else {
+                cur += c;
+            }
+        }
+        if (!cur.empty()) segs.push_back(cur);
+        if (segs.size() > 1) {
+            for (const auto& seg : segs) {
+                if (seg == b) return true;
+                // 只放宽到「候选包含该片段且占比 >=70%」——
+                // 用纯包含会误配:片段「会いに行こう」会命中
+                // 「ねこまむしの旦那に会いに行こう」(6/14 = 43%)。
+                if (seg.size() >= 2 && b.find(seg) != std::wstring::npos &&
+                    seg.size() * 10 >= b.size() * 7)
+                    return true;
+            }
+        }
+    }
+
+    // 兜底:一方完整包含另一方。标准档要求短串占长串 40% 以上,精细档放宽到 30%
     const std::wstring& lo = a.size() <= b.size() ? a : b;
     const std::wstring& hi = a.size() <= b.size() ? b : a;
+    const int needPct = precision >= 2 ? 3 : 4;
     if (lo.size() >= 2 && hi.find(lo) != std::wstring::npos)
-        return lo.size() * 10 >= hi.size() * 4;
+        return lo.size() * 10 >= hi.size() * needPct;
+
+    // 精细档再放宽:短串只要 >=3 个字符,被包含就认(「会いに行こう」这种)
+    if (precision >= 2 && lo.size() >= 3 && hi.find(lo) != std::wstring::npos) return true;
     return false;
 }
 
@@ -438,7 +468,7 @@ int PickCand(const BatchTrack& t, const std::vector<KrcsCand>& cands) {
 
 // 降级源:用 LyricProvider 自己的搜索,只认歌名对得上的
 bool TryProviderSource(LyricProvider& p, const char* source, const BatchTrack& t, RawLyricDoc& doc,
-                       LyricCandidate& picked) {
+                       LyricCandidate& picked, std::string* why = nullptr, int precision = 1) {
     LyricQuery q;
     q.title = t.title;
     q.artist = t.artist;
@@ -446,11 +476,14 @@ bool TryProviderSource(LyricProvider& p, const char* source, const BatchTrack& t
     q.duration_ms = t.duration_ms;
     std::vector<LyricCandidate> list;
     std::string err;
-    if (!p.Search(source, q, list, &err) || list.empty()) return false;
+    if (!p.Search(source, q, list, &err) || list.empty()) {
+        if (why) *why = std::string(source) + ": " + (err.empty() ? "0 results" : err);
+        return false;
+    }
     int best = -1, bestScore = -9999;
     for (size_t i = 0; i < list.size(); ++i) {
         const auto& c = list[i];
-        if (!TitleHit(t.title, c.title)) continue;
+        if (!TitleHit(t.title, c.title, precision)) continue;
         int sc = 0;
         if (Norm(t.title) == Norm(c.title)) sc += 120;
         else if (Core(t.title) == Core(c.title)) sc += 90;
@@ -459,13 +492,29 @@ bool TryProviderSource(LyricProvider& p, const char* source, const BatchTrack& t
             const long long dd = std::llabs((long long)c.duration_ms - (long long)t.duration_ms);
             if (dd <= 3000) sc += 50;
             else if (dd <= 8000) sc += 10;
-            else sc -= 100;
+            else sc -= (precision >= 2 ? 20 : 50);   // 时长对不上只降权,精细档扣得更少
         }
         if (sc > bestScore) { bestScore = sc; best = (int)i; }
     }
-    if (best < 0 || bestScore < 0) return false;
-    if (!p.Fetch(list[best], doc, &err)) return false;
-    if (doc.kind == RawLyricDoc::Payload::Plain) return false;
+    if (best < 0 || bestScore < 0) {
+        if (why) {
+            *why = std::string(source) + ": " + std::to_string(list.size()) + " results, no title match";
+            // 把候选标题带上,否则界面上只看到「需核对」,根本不知道是搜错了还是没这首歌
+            for (size_t k = 0; k < list.size() && k < 3; ++k) {
+                *why += " | " + AudioTagParser::WideToUtf8(list[k].title);
+                if (!list[k].artist.empty()) *why += " / " + AudioTagParser::WideToUtf8(list[k].artist);
+            }
+        }
+        return false;
+    }
+    if (!p.Fetch(list[best], doc, &err)) {
+        if (why) *why = std::string(source) + ": fetch " + (err.empty() ? "failed" : err);
+        return false;
+    }
+    if (doc.kind == RawLyricDoc::Payload::Plain) {
+        if (why) *why = std::string(source) + ": plain lyric only";
+        return false;
+    }
     picked = list[best];
     return true;
 }
@@ -573,7 +622,8 @@ std::vector<BatchOutcome> LyricBatch::Run(const std::vector<BatchTrack>& tracks,
                 // 那个接口早已废弃 —— 返回 200 但 candidates 恒为空,每首歌白跑 4 次请求,
                 // 还把 note 写成 "kugou fast: no candidates",看起来像网络问题。
                 // 统一走 provider 的两段式:songsearch 拿 FileHash,再用 hash 查 krcs。
-                if (src == 0 && TryProviderSource(provider, "kugou", t, doc, picked)) src = 1;
+                if (src == 0 && TryProviderSource(provider, "kugou", t, doc, picked, &r.note, opt.precision))
+                    src = 1;
 
                 r.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                 r.requests = t_requests;

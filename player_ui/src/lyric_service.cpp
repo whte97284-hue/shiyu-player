@@ -1,4 +1,6 @@
 #include "lyric_service.h"
+#include <QSettings>
+#include <algorithm>
 
 #include <QFileInfo>
 #include <QMetaObject>
@@ -27,11 +29,20 @@ bool HasLrc(const std::wstring& audioPath) {
 } // namespace
 
 LyricService::LyricService(LibraryService* lib, QObject* parent) : QObject(parent), lib_(lib) {
+    precision_ = std::clamp(QSettings().value("lyrics/precision", 1).toInt(), 0, 2);
     connect(lib_, &LibraryService::libraryChanged, this, [this]() {
         missingCache_ = -1;
         statesCache_.clear();
         emit missingCountChanged();
     });
+}
+
+void LyricService::setPrecision(int v) {
+    v = std::clamp(v, 0, 2);
+    if (v == precision_) return;
+    precision_ = v;
+    QSettings().setValue("lyrics/precision", v);
+    emit precisionChanged();
 }
 
 LyricService::~LyricService() {
@@ -148,10 +159,12 @@ void LyricService::start(std::vector<Job> jobs) {
         }
 
         lyric_core::BatchOptions opt;
-        opt.threads = 8;
+        opt.precision = precision_;
+        // 快速档并发拉高、不降级;精细档少开线程(每首请求更多),换命中率
+        opt.threads = precision_ == 0 ? 10 : (precision_ >= 2 ? 4 : 8);
         opt.write_lrc = true;
         opt.overwrite = false; // 绝不覆盖用户已有的歌词
-        opt.allow_fallback = true;
+        opt.allow_fallback = precision_ != 0;
         opt.cancel = cancel_.get();
         opt.on_progress = [this, &tracks](size_t d, size_t n) {
             if (cancel_ && cancel_->load()) return;
