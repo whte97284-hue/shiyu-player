@@ -219,7 +219,7 @@ public:
     Q_INVOKABLE bool playStream(const QString& url, const QString& title,
                                 const QString& artist, const QString& album,
                                 const QString& coverUrl, bool autoPlay = true,
-                                int durationMs = 0);
+                                int durationMs = 0, const QVariantMap& identity = {});
     Q_INVOKABLE void toggle();
     Q_INVOKABLE void next();
     Q_INVOKABLE void previous();
@@ -255,6 +255,8 @@ signals:
     void streamEnded();
     // 输出设备重建后旧直链已经打不开了（多半是过期）。在线服务收到后重新解析一次。
     void streamNeedsReload();
+    // 上次退出时正在播在线曲目：把身份和位置交给在线服务重新解析
+    void streamRestoreRequested(const QVariantMap& identity, double position);
     void signalChainChanged();
     void playingChanged();
     void positionChanged();
@@ -370,6 +372,9 @@ private:
     struct StreamInfo {
         QString title, artist, album, cover;
         int durationMs = 0;   // 搜索结果里的时长：引擎还没报总长时用它匹配歌词
+        // 曲目身份：退出时写进会话，下次启动才能把这首在线歌找回来
+        int source = 0;
+        QString id, albumId;
     } streamInfo_;
     // current_ 指向的曲目所在的快照。扫描后点歌会先把 snap_ 换成新快照,
     // 若没人再持有旧快照,current_ 就悬空了 (暂停 → 重新扫描 → 点播放时崩溃)

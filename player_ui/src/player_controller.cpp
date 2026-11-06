@@ -190,17 +190,33 @@ QString SessionFile() { return LibraryService::dataDir() + "/session.json"; }
 } // namespace
 
 void PlayerController::saveSession() {
-    // 在线曲目不在队列里（queueIndex_ = -1），写进会话会把下次启动的位置弄丢
-    if (streaming_) return;
-    if (!snap_ || queue_.empty()) return;
-    QJsonArray keys;
-    for (uint64_t id : queue_)
-        if (const TrackItem* t = snap_->catalog.FindById(id)) keys.append(TrackKeyOf(*t));
+    // 本地队列和在线曲目都可能为空，两个都空才不写
+    const bool hasQueue = snap_ && !queue_.empty();
+    if (!hasQueue && !streaming_) return;
     QJsonObject o;
-    o["keys"] = keys;
-    o["index"] = queueIndex_;
-    o["tag"] = queueTag_;
+    if (hasQueue) {
+        QJsonArray keys;
+        for (uint64_t id : queue_)
+            if (const TrackItem* t = snap_->catalog.FindById(id)) keys.append(TrackKeyOf(*t));
+        o["keys"] = keys;
+        o["index"] = queueIndex_;
+        o["tag"] = queueTag_;
+    }
     o["position"] = position_;
+    // 在线曲目：记下身份 + 位置，下次启动按 id 重新解析。
+    // 以前这里直接 return，所以在线歌退出后什么都不剩。
+    if (streaming_ && !streamInfo_.id.isEmpty()) {
+        QJsonObject st;
+        st["source"] = streamInfo_.source;
+        st["id"] = streamInfo_.id;
+        st["albumId"] = streamInfo_.albumId;
+        st["title"] = streamInfo_.title;
+        st["artist"] = streamInfo_.artist;
+        st["album"] = streamInfo_.album;
+        st["cover"] = streamInfo_.cover;
+        st["durationMs"] = streamInfo_.durationMs;
+        o["stream"] = st;
+    }
     QSaveFile f(SessionFile());
     if (f.open(QIODevice::WriteOnly)) {
         f.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
@@ -227,13 +243,32 @@ void PlayerController::restoreSession() {
         if (i == index) mapped = static_cast<int>(ids.size());
         ids.push_back(it->second);
     }
+    const QJsonObject st = o.value("stream").toObject();
+    if (!ids.empty()) {
+        snap_ = snap;
+        queue_ = ids;
+        unshuffled_ = ids;
+        queueTag_ = o.value("tag").toString();
+        reresolveAlbumTag();
+        queueContentChanged();
+    }
+    // 上次退出时在播在线曲目：交给在线服务重新解析（本地队列留在那儿，按下一首还能接着听）
+    if (!st.isEmpty()) {
+        QVariantMap m;
+        m["source"] = st.value("source").toInt();
+        m["id"] = st.value("id").toString();
+        m["albumId"] = st.value("albumId").toString();
+        m["title"] = st.value("title").toString();
+        m["artist"] = st.value("artist").toString();
+        m["album"] = st.value("album").toString();
+        m["cover"] = st.value("cover").toString();
+        m["durationMs"] = st.value("durationMs").toInt();
+        if (!m["id"].toString().isEmpty()) {
+            emit streamRestoreRequested(m, o.value("position").toDouble());
+            return;
+        }
+    }
     if (ids.empty()) return;
-    snap_ = snap;
-    queue_ = ids;
-    unshuffled_ = ids;
-    queueTag_ = o.value("tag").toString();
-    reresolveAlbumTag();
-    queueContentChanged();
     // 暂停在上次的位置,等用户按播放
     if (openIndex(std::max(0, mapped), false) && mapped >= 0) {
         double pos = o.value("position").toDouble();
@@ -775,7 +810,11 @@ void PlayerController::rebuildOutput() {
     if (wasStreaming && !url.isEmpty()) {
         const QString t = streamInfo_.title, a = streamInfo_.artist;
         const QString al = streamInfo_.album, c = streamInfo_.cover;
-        if (playStream(url, t, a, al, c, /*autoPlay=*/false, streamInfo_.durationMs)) {
+        QVariantMap ident;
+        ident["source"] = streamInfo_.source;
+        ident["id"] = streamInfo_.id;
+        ident["albumId"] = streamInfo_.albumId;
+        if (playStream(url, t, a, al, c, /*autoPlay=*/false, streamInfo_.durationMs, ident)) {
             // 先起播再定位：toggle() 对流式曲目会 SeekTo(0)，顺序反了会把位置冲掉
             if (wasPlaying) toggle();
             if (pos > 0.5) seek(pos);
@@ -942,7 +981,8 @@ void PlayerController::playTrack(double trackId) {
 
 bool PlayerController::playStream(const QString& url, const QString& title,
                                   const QString& artist, const QString& album,
-                                  const QString& coverUrl, bool autoPlay, int durationMs) {
+                                  const QString& coverUrl, bool autoPlay, int durationMs,
+                                  const QVariantMap& identity) {
     if (url.isEmpty()) return false;
     ensureEngine();
     if (!engine_) return false;
@@ -973,6 +1013,9 @@ bool PlayerController::playStream(const QString& url, const QString& title,
     streamInfo_.album = album;
     streamInfo_.cover = coverUrl;
     streamInfo_.durationMs = durationMs;
+    if (identity.contains("source")) streamInfo_.source = identity.value("source").toInt();
+    if (identity.contains("id")) streamInfo_.id = identity.value("id").toString();
+    if (identity.contains("albumId")) streamInfo_.albumId = identity.value("albumId").toString();
     current_ = nullptr;
     currentSnap_.reset();
     queueIndex_ = -1;

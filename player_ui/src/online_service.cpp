@@ -10,10 +10,12 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QDesktopServices>
+#include <QTimer>
 #include <QUrl>
 
 #include <cstdio>
 #include <chrono>
+#include <memory>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -236,6 +238,8 @@ OnlineService::OnlineService(LibraryService* lib, PlayerController* player, QObj
         });
         // 输出设备重建后旧直链已经失效（多半过期）：重新解析当前这首一次。
         // 只重试一轮，再失败就让用户自己点，避免无限循环。
+        connect(player_, &PlayerController::streamRestoreRequested, this,
+                [this](const QVariantMap& m, double pos) { restoreStream(m, pos); });
         // 播本地曲目时，在线列表不该再高亮任何一行（playing_ 只是 raw_ 的下标）
         connect(player_, &PlayerController::trackChanged, this, [this]() {
             if (player_ && !player_->isStreaming() && (playing_ >= 0 || !playingKey_.isEmpty())) {
@@ -427,6 +431,58 @@ bool OnlineService::Blocked() {
     SetBusy(false);
     SetStatus(tr("已关闭联网 · 可在设置里重新打开"));
     return true;
+}
+
+void OnlineService::restoreStream(const QVariantMap& m, double position) {
+    if (Blocked()) return;
+    Track t;
+    t.source = m.value("source").toInt() == 0 ? Source::Kugou : Source::Netease;
+    t.id = m.value("id").toString().toStdString();
+    if (t.id.empty()) return;
+    t.title = m.value("title").toString().toStdString();
+    t.artist = m.value("artist").toString().toStdString();
+    t.album = m.value("album").toString().toStdString();
+    t.albumId = m.value("albumId").toString().toStdString();
+    t.durationMs = m.value("durationMs").toInt();
+    t.coverUrl = m.value("cover").toString().toStdString();
+
+    // 上次在播的那首歌单独铺一屏，界面能看见它、也能点播放
+    raw_.clear();
+    raw_.push_back(t);
+    tracks_.clear();
+    tracks_.append(TrackToMap(t));
+    artists_.clear();
+    albums_.clear();
+    viewMode_ = 1;
+    listName_ = tr("上次播放");
+    canMore_ = false;
+    resumeSeek_ = position;
+    restorePaused_ = true;   // 和本地曲目一样：停在上次的位置，等用户按播放
+    emit viewChanged();
+    emit tracksChanged();
+    emit tracksReset();
+    play(0);
+}
+
+// 流式源只能跳到"已经下载到的范围"。刚开播时目标位置还没数据，SeekTo 会失败并保持原位，
+// 所以每隔 400ms 重试一次，数据追上就停（最多约 20 秒）。
+void OnlineService::ApplyResumeSeek(double target) {
+    auto tries = std::make_shared<int>(0);
+    auto* timer = new QTimer(this);
+    timer->setInterval(400);
+    connect(timer, &QTimer::timeout, this, [this, target, tries, timer]() {
+        if (!player_ || ++(*tries) > 50) {
+            timer->stop();
+            timer->deleteLater();
+            return;
+        }
+        player_->seek(target);
+        if (player_->position() > target - 3.0) {
+            timer->stop();
+            timer->deleteLater();
+        }
+    });
+    timer->start();
 }
 
 void OnlineService::clearTempCache() {
@@ -1021,6 +1077,8 @@ void OnlineService::play(int row) {
                 this,
                 [this, r]() {
                     pending_ = -1;
+                    restorePaused_ = false;
+                    resumeSeek_ = -1.0;
                     emit playingChanged();
                     SetBusy(false);
                     SetProgress(0);
@@ -1051,17 +1109,31 @@ void OnlineService::play(int row) {
                 }
                 const QString coverArg =
                     coverPath.isEmpty() ? QString() : QUrl::fromLocalFile(coverPath).toString();
+                QVariantMap ident;
+                ident["source"] = static_cast<int>(t.source);
+                ident["id"] = ToQ(t.id);
+                ident["albumId"] = ToQ(t.albumId);
+                const bool autoPlay = !restorePaused_;
+                restorePaused_ = false;
                 const bool ok = player_->playStream(ToQ(url), ToQ(t.title), ToQ(t.artist),
-                                                    ToQ(t.album), coverArg, true, t.durationMs);
+                                                    ToQ(t.album), coverArg, autoPlay,
+                                                    t.durationMs, ident);
                 pending_ = -1;
                 if (ok) {
                     playing_ = row;
                     playingKey_ = ToQ(t.title) + QLatin1Char('\n') + ToQ(t.artist);
                     emit playingChanged();
+                    if (resumeSeek_ > 1.0) {
+                        const double target = resumeSeek_;
+                        resumeSeek_ = -1.0;
+                        ApplyResumeSeek(target);
+                    }
                 } else if (playing_ == row) {
                     // 起播失败还留着"正在播放"，再点这一行只会走暂停/继续 ——
                     // 清掉它，用户再点一次才会重新解析
                     playing_ = -1;
+                    restorePaused_ = false;
+                    resumeSeek_ = -1.0;
                     emit playingChanged();
                 }
                 SetStatus(ok ? (save ? tr("播放中 · 后台保存")

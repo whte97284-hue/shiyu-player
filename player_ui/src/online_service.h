@@ -120,6 +120,8 @@ public:
     Q_INVOKABLE void cancelLogin();
     Q_INVOKABLE void logout();
     Q_INVOKABLE void clearTempCache();   // 清掉「听完即删」留下的临时文件
+    // 上次退出时正在播的在线曲目：按 id 重新解析，恢复到原位置（暂停）
+    void restoreStream(const QVariantMap& identity, double position);
     Q_INVOKABLE void openDownloadDir();
 
 signals:
@@ -155,6 +157,8 @@ private:
     void SyncPlayingRow();
     // 全局断网时拦下所有联网操作（返回 true 表示已拦下）
     bool Blocked();
+    // 流式源只能跳到已下载的范围：恢复进度时反复试，直到数据追上
+    void ApplyResumeSeek(double target);
     // 听完即删模式用的临时目录：不放进曲库目录，免得用户以为收藏了
     QString CacheDir() const;
     void PurgeCacheDir();
@@ -171,6 +175,8 @@ private:
     bool autoSave_ = true;
     int playing_ = -1;
     int pending_ = -1;
+    double resumeSeek_ = -1.0;    // 恢复会话时要跳到的位置
+    bool restorePaused_ = false;  // 恢复的那一次不要自动出声
     // 正在播放的那首歌的身份：列表换了以后靠它重新定位，而不是沿用旧下标
     QString playingKey_;
 
