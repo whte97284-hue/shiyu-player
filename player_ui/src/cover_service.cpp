@@ -1,4 +1,5 @@
 #include "cover_service.h"
+#include "settings_service.h"
 
 #include "audio_tag_parser.hpp"
 #include "cover_fetcher.hpp"
@@ -132,6 +133,7 @@ void CoverService::cancel() {
 
 void CoverService::fetchAlbums(const QVariantList& indexes) {
     if (busy_) return;
+    if (SettingsService::Offline()) return;   // 全局断网：不联网补封面
     if (worker_.joinable()) worker_.join();
 
     auto s = lib_->snapshot();

@@ -31,6 +31,7 @@
 #include "library_service.h"
 #include "models.h"
 #include "player_controller.h"
+#include "online_service.h"
 #include "playlist_service.h"
 #include "playlist_importer.h"
 #include "decrypt_service.h"
@@ -1067,6 +1068,7 @@ int main(int argc, char* argv[]) {
     DecryptorRegistry::Instance().SetToolsDir((QCoreApplication::applicationDirPath() + "/tools").toStdWString());
     LibraryService library;
     PlayerController player(&library);
+    OnlineService online(&library, &player);
     // 播放历史先于专辑墙建立:曲库变化时它先更新,专辑墙「最近播放」排序用到它
     PlaylistService playlists(&library);
     AlbumModel albums(&library, &playlists);
@@ -1104,6 +1106,7 @@ int main(int argc, char* argv[]) {
     QQmlContext* ctx = engine.rootContext();
     ctx->setContextProperty("library", &library);
     ctx->setContextProperty("player", &player);
+    ctx->setContextProperty("online", &online);
     ctx->setContextProperty("albumModel", &albums);
     ctx->setContextProperty("albumTracks", &albumTracks);
     ctx->setContextProperty("searchModel", &search);

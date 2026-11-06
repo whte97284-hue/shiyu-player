@@ -489,6 +489,61 @@ Item {
             }
 
             // ======================= 曲库 =======================
+            // ======================= 在线曲库 =======================
+            SectionTitle { text: qsTr("在线曲库") }
+            Panel {
+                order: 3
+                SettingRow {
+                    label: qsTr("默认音质")
+                    hint: qsTr("取不到这一档时自动往下降；VIP 曲目需要登录")
+                    Segmented {
+                        options: [{ t: qsTr("无损"), v: 0 }, { t: "320K", v: 1 }, { t: "128K", v: 2 }]
+                        value: online.quality
+                        onPicked: (v) => online.quality = v
+                    }
+                }
+                SettingRow {
+                    label: qsTr("播放时的保存方式")
+                    hint: qsTr("边听边存会下载完整文件并加入曲库；听完即删只落到临时目录，播完清理")
+                    Segmented {
+                        options: [{ t: qsTr("边听边存"), v: true }, { t: qsTr("听完即删"), v: false }]
+                        value: online.autoSave
+                        onPicked: (v) => online.autoSave = v
+                    }
+                }
+                SettingRow {
+                    label: qsTr("下载目录")
+                    hint: online.downloadDir
+                    Capsule { text: qsTr("打开"); onClicked: online.openDownloadDir() }
+                }
+                SettingRow {
+                    label: qsTr("酷狗账号")
+                    hint: online.loggedIn ? qsTr("已登录：%1").arg(online.nickname)
+                                          : qsTr("未登录时 VIP 曲目只能试听")
+                    Capsule {
+                        text: online.loggedIn ? qsTr("退出登录") : qsTr("扫码登录")
+                        onClicked: online.loggedIn ? online.logout() : online.beginLogin()
+                    }
+                }
+                SettingRow {
+                    noSep: true
+                    label: qsTr("临时缓存")
+                    hint: qsTr("「听完即删」模式留下的文件，退出时会自动清理")
+                    Capsule { text: qsTr("清理"); onClicked: online.clearTempCache() }
+                }
+            }
+
+            // ======================= 联网 =======================
+            SectionTitle { text: qsTr("联网") }
+            Panel {
+                order: 3
+                SettingRow {
+                    label: qsTr("允许联网")
+                    hint: qsTr("关掉后不再发出任何外部请求：在线曲库、在线歌词、联网补封面、批量查歌词全部停用；本地播放与本地歌词不受影响")
+                    Toggle { checked: !settings.offline; onToggled: (v) => settings.offline = !v }
+                }
+            }
+
             SectionTitle { text: qsTr("曲库") }
             Panel {
                 order: 3

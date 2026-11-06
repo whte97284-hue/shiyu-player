@@ -66,6 +66,8 @@ class PlayerController : public QObject {
     Q_PROPERTY(QVariantList signalChain READ signalChain NOTIFY signalChainChanged)
     Q_PROPERTY(bool bitPerfect READ bitPerfect NOTIFY signalChainChanged)
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged)
+    // 当前是不是在线流式播放（曲目不在曲库里）。界面据此区分两条通道
+    Q_PROPERTY(bool streaming READ isStreaming NOTIFY trackChanged)
     Q_PROPERTY(double position READ position NOTIFY positionChanged)
     Q_PROPERTY(double duration READ duration NOTIFY trackChanged)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
@@ -132,7 +134,8 @@ public:
     void attachWindow(QQuickWindow* window);
     ~PlayerController() override;
 
-    bool hasTrack() const { return current_ != nullptr; }
+    bool hasTrack() const { return current_ != nullptr || streaming_; }
+    bool isStreaming() const { return streaming_; }
     double trackId() const { return current_ ? static_cast<double>(current_->id) : -1; }
     int albumIndex() const;
     QString title() const;
@@ -210,6 +213,13 @@ public:
 
     Q_INVOKABLE void playAlbum(int albumIndex, int startRow = 0);
     Q_INVOKABLE void playTrack(double trackId);
+    // 在线播放：把直链交给引擎流式解码，点了就出声（不等下载完）。
+    // 不进曲库队列，current_ 置空，元信息走 streamInfo_。
+    // autoPlay=false 用于"重建输出后原地恢复"：先打开、再按原来的播放状态决定要不要出声
+    Q_INVOKABLE bool playStream(const QString& url, const QString& title,
+                                const QString& artist, const QString& album,
+                                const QString& coverUrl, bool autoPlay = true,
+                                int durationMs = 0);
     Q_INVOKABLE void toggle();
     Q_INVOKABLE void next();
     Q_INVOKABLE void previous();
@@ -241,6 +251,10 @@ public:
 
 signals:
     void trackChanged();
+    // 在线流式曲目自然播完（不是被切歌）。在线服务用它清理临时文件。
+    void streamEnded();
+    // 输出设备重建后旧直链已经打不开了（多半是过期）。在线服务收到后重新解析一次。
+    void streamNeedsReload();
     void signalChainChanged();
     void playingChanged();
     void positionChanged();
@@ -303,6 +317,12 @@ private:
                          const QHash<qint64, QVariantList>& words = {});
     void updateLyricIndex();
     void extractAccent();
+    // 在线流式曲目没有曲库条目，封面是临时文件：单独走一条取色路径
+    void extractStreamAccent(const QString& localPath);
+    // 在线歌词这一轮已经重试过几次（断网/刚唤醒时给一次补试机会）
+    int lyricRetry_ = 0;
+    // 设备被系统收走后重建输出（先只换设备，不行再重建整条链）
+    void recoverDevice();
     void setPlaying(bool p);
     void ensureEngine();
     void rebuildOutput();
@@ -342,6 +362,15 @@ private:
     bool restored_ = false;
     qint64 lastSessionSave_ = 0;
     const TrackItem* current_ = nullptr;
+    // 在线流式播放时 current_ 为空（不在曲库里），正在播放的信息放这里。
+    // hasTrack/title/artist/album/cover 都会优先读它。
+    bool streaming_ = false;
+    QString streamUrl_;          // 当前在线曲目的直链，设备重建时要用
+    qint64 lastDeviceRecover_ = 0;
+    struct StreamInfo {
+        QString title, artist, album, cover;
+        int durationMs = 0;   // 搜索结果里的时长：引擎还没报总长时用它匹配歌词
+    } streamInfo_;
     // current_ 指向的曲目所在的快照。扫描后点歌会先把 snap_ 换成新快照,
     // 若没人再持有旧快照,current_ 就悬空了 (暂停 → 重新扫描 → 点播放时崩溃)
     std::shared_ptr<const LibrarySnapshot> currentSnap_;

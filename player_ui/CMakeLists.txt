@@ -13,6 +13,7 @@ qt_add_executable(KugouPlayer
     src/decrypt_service.h src/decrypt_service.cpp
     src/cover_service.h src/cover_service.cpp
     src/lyric_service.h src/lyric_service.cpp
+    src/online_service.h src/online_service.cpp
     src/folder_watcher.h src/folder_watcher.cpp
     src/settings_service.h src/settings_service.cpp
     src/library_tools.h src/library_tools.cpp
@@ -29,6 +30,8 @@ qt_add_qml_module(KugouPlayer
     RESOURCE_PREFIX /qt/qml
     QML_FILES
         qml/Main.qml
+        qml/OnlinePage.qml
+        qml/TrackLine.qml
         qml/Theme.qml
         qml/TitleBar.qml
         qml/SideNav.qml

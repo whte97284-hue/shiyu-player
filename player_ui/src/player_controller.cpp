@@ -1,5 +1,6 @@
 #include "player_controller.h"
 #include "settings_service.h"
+#include "stream_source.hpp"
 
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -189,6 +190,8 @@ QString SessionFile() { return LibraryService::dataDir() + "/session.json"; }
 } // namespace
 
 void PlayerController::saveSession() {
+    // 在线曲目不在队列里（queueIndex_ = -1），写进会话会把下次启动的位置弄丢
+    if (streaming_) return;
     if (!snap_ || queue_.empty()) return;
     QJsonArray keys;
     for (uint64_t id : queue_)
@@ -258,18 +261,32 @@ int PlayerController::albumIndex() const {
     return it == snap_->trackAlbum.end() ? -1 : it->second;
 }
 
-QString PlayerController::title() const { return current_ ? Q(current_->title) : QString(); }
-QString PlayerController::artist() const { return current_ ? Q(current_->artist) : QString(); }
-QString PlayerController::album() const { return current_ ? Q(current_->album) : QString(); }
-QString PlayerController::quality() const { return current_ ? LibraryService::trackQuality(*current_) : QString(); }
+QString PlayerController::title() const {
+    if (streaming_) return streamInfo_.title;
+    return current_ ? Q(current_->title) : QString();
+}
+QString PlayerController::artist() const {
+    if (streaming_) return streamInfo_.artist;
+    return current_ ? Q(current_->artist) : QString();
+}
+QString PlayerController::album() const {
+    if (streaming_) return streamInfo_.album;
+    return current_ ? Q(current_->album) : QString();
+}
+QString PlayerController::quality() const {
+    if (streaming_) return tr("在线");
+    return current_ ? LibraryService::trackQuality(*current_) : QString();
+}
 double PlayerController::duration() const { return engine_ ? engine_->GetDurationSeconds() : 0.0; }
 
 QString PlayerController::cover() const {
+    if (streaming_) return streamInfo_.cover;
     if (!current_) return {};
     return QString("image://cover/t/%1/%2").arg(lib_->generation()).arg(current_->id);
 }
 
 QString PlayerController::backdrop() const {
+    if (streaming_) return streamInfo_.cover;
     if (!current_) return {};
     return QString("image://cover/b/%1/%2").arg(lib_->generation()).arg(current_->id);
 }
@@ -745,10 +762,29 @@ void PlayerController::rebuildOutput() {
     const double pos = position_;
     const bool wasPlaying = playing_;
     const int idx = queueIndex_;
+    const bool wasStreaming = streaming_;
+    const QString url = streamUrl_;
     engine_->on_playback_ended = nullptr;
     engine_->on_track_advanced = nullptr;
+    engine_->on_device_lost = nullptr;
     engine_->Shutdown();
     engine_.reset();
+
+    // 在线曲目没有曲库 id（queueIndex_ = -1），以前这里直接跳过 ——
+    // 重建后引擎是空的，界面还显示着这首歌，但按播放键毫无反应。
+    if (wasStreaming && !url.isEmpty()) {
+        const QString t = streamInfo_.title, a = streamInfo_.artist;
+        const QString al = streamInfo_.album, c = streamInfo_.cover;
+        if (playStream(url, t, a, al, c, /*autoPlay=*/false, streamInfo_.durationMs)) {
+            // 先起播再定位：toggle() 对流式曲目会 SeekTo(0)，顺序反了会把位置冲掉
+            if (wasPlaying) toggle();
+            if (pos > 0.5) seek(pos);
+        } else {
+            // 直链过期了：交给在线服务重新解析一次
+            emit streamNeedsReload();
+        }
+        return;
+    }
     if (idx >= 0 && openIndex(idx, false)) {
         if (pos > 0.5) seek(pos);
         if (wasPlaying) toggle();
@@ -769,6 +805,27 @@ void PlayerController::ensureEngine() {
     engine_->on_track_advanced = [self]() {
         if (self) QMetaObject::invokeMethod(self, [self]() { if (self) self->onAdvanced(); }, Qt::QueuedConnection);
     };
+    // 休眠唤醒 / 拔耳机 / 驱动重置：WASAPI 端点会失效，设备线程直接停掉。
+    // 以前没人管这件事，表现就是"睡醒之后没声音，得去设置里切一下设备"。
+    engine_->on_device_lost = [self]() {
+        if (self) QMetaObject::invokeMethod(self, [self]() { if (self) self->recoverDevice(); }, Qt::QueuedConnection);
+    };
+}
+
+// 设备被系统收走后重建输出。先尝试只换设备（解码器和在线缓冲都保留，能原地接上），
+// 不行再退回整条输出链重建。
+void PlayerController::recoverDevice() {
+    if (!engine_) return;
+    // 一次休眠可能连着来好几个通知，1.5 秒内只处理一次
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - lastDeviceRecover_ < 1500) return;
+    lastDeviceRecover_ = now;
+
+    if (engine_->RestartDevice()) {
+        if (!error_.isEmpty()) { error_.clear(); emit errorChanged(); }
+        return;
+    }
+    rebuildOutput();
 }
 
 void PlayerController::scheduleGapless() {
@@ -850,6 +907,12 @@ int PlayerController::sleepRemaining() const {
 }
 
 void PlayerController::onEnded() {
+    // 在线流式播放不进队列，播完就停，别去翻曲库的下一首
+    if (streaming_) {
+        setPlaying(false);
+        emit streamEnded();   // 在线服务据此决定要不要删掉临时文件
+        return;
+    }
     if (sleepMinutes_ == -1) {
         // 播完本首后停止:停在下一首的开头,按播放即可继续
         setSleepTimer(0);
@@ -877,6 +940,71 @@ void PlayerController::playTrack(double trackId) {
     playAlbum(it->second, row);
 }
 
+bool PlayerController::playStream(const QString& url, const QString& title,
+                                  const QString& artist, const QString& album,
+                                  const QString& coverUrl, bool autoPlay, int durationMs) {
+    if (url.isEmpty()) return false;
+    ensureEngine();
+    if (!engine_) return false;
+
+    std::string err;
+    auto src = stream_core::OpenHttpStream(url.toStdString(),
+                                           "Mozilla/5.0 KugouPlayer/1.0", &err);
+    if (!src) {
+        error_ = tr("无法建立在线连接：%1").arg(QString::fromStdString(err));
+        emit errorChanged();
+        return false;
+    }
+    if (!engine_->OpenStream(src)) {
+        error_ = tr("在线音频打开失败（格式不支持或链接已过期）");
+        emit errorChanged();
+        return false;
+    }
+    if (!error_.isEmpty()) {
+        error_.clear();
+        emit errorChanged();
+    }
+
+    // 不进队列：current_ 置空，元信息走 streamInfo_。
+    // 这样 next/previous/无缝预加载都不会把在线曲目当成曲库条目处理。
+    streaming_ = true;
+    streamInfo_.title = title;
+    streamInfo_.artist = artist;
+    streamInfo_.album = album;
+    streamInfo_.cover = coverUrl;
+    streamInfo_.durationMs = durationMs;
+    current_ = nullptr;
+    currentSnap_.reset();
+    queueIndex_ = -1;
+    // 在线曲目不属于任何本地队列：不清掉标签，歌曲页会以为"当前队列就是这一页"，
+    // 把播放键显示成暂停，点下去却停的是在线曲
+    queueTag_.clear();
+    position_ = 0;
+    nextId_ = 0;
+    nextIndex_ = -1;
+    fade_.stop();
+    gain_ = 1.0;
+    applyVolume();
+    streamUrl_ = url;   // 设备重建时要拿它重新打开
+    if (autoPlay) {
+        engine_->Play();
+        setPlaying(true);
+        timer_.start();
+    } else {
+        setPlaying(false);
+    }
+    emit trackChanged();
+    emit queueIndexChanged();
+    emit queueChanged();
+    emit positionChanged();
+    // 歌词必须跟着换：否则面板会一直留着上一首的（本地曲目走 onTrackOpened，
+    // 流式播放以前根本没有这一步）
+    loadLyrics();
+    // 在线封面已落成本地文件：顺手取主色，让整页强调色跟着这首歌走
+    if (coverUrl.startsWith("file:")) extractStreamAccent(QUrl(coverUrl).toLocalFile());
+    return true;
+}
+
 bool PlayerController::openIndex(int index, bool autoPlay) {
     if (!snap_ || index < 0 || index >= static_cast<int>(queue_.size())) return false;
     ensureEngine();
@@ -898,6 +1026,8 @@ bool PlayerController::openIndex(int index, bool autoPlay) {
             emit errorChanged();
         }
         nextId_ = 0; // OpenFile 已清掉引擎里预加载的下一首
+        streaming_ = false;   // 回到曲库曲目，清掉在线播放的临时元信息
+        streamUrl_.clear();
         nextIndex_ = -1;
         engine_->SetReplayGain(gainFor(t));
         fade_.stop();
@@ -929,10 +1059,14 @@ void PlayerController::onTrackOpened(const TrackItem* t, int index) {
 }
 
 void PlayerController::toggle() {
-    if (!engine_ || !current_) {
+    // 在线流式播放时 current_ 是空的(曲目不在曲库里),这里必须放行。
+    // 原来写 !current_ 会把「暂停」当成「还没开始播」,直接从队列拉起下一首 ——
+    // 表现就是流式歌听完点暂停,跳到了本地队列的第一首。
+    if (!current_ && !streaming_) {
         if (!queue_.empty()) openIndex(std::max(0, queueIndex_), true);
         return;
     }
+    if (!engine_) return;
     const int fadeOut = SettingsService::FadeOutMs(), fadeIn = SettingsService::FadeInMs();
     const bool useFade = fadeOut > 0;
     if (playing_) {
@@ -955,6 +1089,13 @@ void PlayerController::toggle() {
     } else {
         fade_.stop();
         disconnect(&fade_, &QVariantAnimation::finished, nullptr, nullptr);
+        // 流式曲目播完后引擎停在 Stopped,解码器也停在末尾:
+        // 这时直接 Play 会在第一帧就再次判定结束,所以先回到开头。
+        if (streaming_ && engine_->GetState() == PlaybackState::Stopped) {
+            engine_->SeekTo(0.0);
+            position_ = 0;
+            emit positionChanged();
+        }
         if (engine_->GetState() != PlaybackState::Playing) engine_->TogglePlay();
         setPlaying(true);
         timer_.start();
@@ -1130,6 +1271,33 @@ void PlayerController::rebuildSignalChain() {
 
     bitPerfect_ = perfect;
     emit signalChainChanged();
+}
+
+void PlayerController::extractStreamAccent(const QString& localPath) {
+    if (localPath.isEmpty()) return;
+    const int req = ++accentRequest_;
+    QPointer<PlayerController> self(this);
+    QThreadPool::globalInstance()->start([self, req, localPath]() {
+        QImage img(localPath);
+        if (img.isNull()) return;
+        // 在线封面一般是 500px 的 jpg，缩到 256 再取色：和本地曲目走同一套驯化逻辑，
+        // 保证「跟着封面变色」在两条播放通道上观感一致
+        img = img.scaled(256, 256, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+        const QColor c = ExtractAccentColor(img);
+        const QList<QColor> pal = ExtractPalette(img);
+        QMetaObject::invokeMethod(
+            self,
+            [self, req, c, pal, img]() {
+                if (!self || req != self->accentRequest_) return;
+                self->coverImage_ = img;
+                emit self->coverImageChanged();
+                self->accent_ = c;
+                self->palette_.clear();
+                for (const QColor& p : pal) self->palette_.append(p);
+                emit self->accentChanged();
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 void PlayerController::extractAccent() {
@@ -1425,6 +1593,7 @@ void PlayerController::setLyricSource(const QString& kind, const QString& label,
 // 两者都没有时,在后台到本机酷狗歌词库 (.krc) 里按歌名 / 歌手严格匹配
 void PlayerController::loadLyrics() {
     ++lyricsGen_;
+    lyricRetry_ = 0;
     // 换歌 / 重新加载:上一首的搜索结果作废
     ++lyricSearchGen_;
     lyricCandRaw_.clear();
@@ -1478,6 +1647,10 @@ void PlayerController::loadLyrics() {
         else text = hasBody(first) ? first : QString();
         // 两处都只有署名或为空:去酷狗歌词库 / 在线找;找不到时先显示署名行
         if (!hasBody(text)) { if (text.isEmpty()) text = first; loadKugouLyrics(); }
+    } else if (streaming_) {
+        // 在线曲目没有本地文件，但有歌名和歌手 —— 照样去歌词库 / 在线找一次。
+        // 以前这里什么都不做，结果就是切到在线曲目时面板还留着上一首的歌词。
+        loadKugouLyrics();
     }
     lyricText_ = kind == QLatin1String("none") ? QString() : text;
     if (kind == QLatin1String("file")) setLyricSource(kind, QStringLiteral("同名歌词文件"), QFileInfo(lrcPath).fileName(), lrcPath);
@@ -1556,9 +1729,27 @@ void PlayerController::useLocalLyrics() {
 // 在线拉到的 KRC 缓存到应用数据目录 lyrics/,下次直接从本地命中
 void PlayerController::loadKugouLyrics() {
     const quint64 gen = lyricsGen_;
-    const std::wstring path = current_->file_path, title = current_->title, artist = current_->artist;
-    const uint32_t durationMs = current_->duration_ms;
-    const bool online = QSettings().value("player/onlineLyrics", true).toBool();
+    std::wstring path, title, artist;
+    uint32_t durationMs = 0;
+    if (current_) {
+        path = current_->file_path;
+        title = current_->title;
+        artist = current_->artist;
+        durationMs = current_->duration_ms;
+    } else if (streaming_) {
+        // 在线曲目：没有文件路径，靠歌名 / 歌手匹配；时长用引擎报的（可能还是 0）
+        title = streamInfo_.title.toStdWString();
+        artist = streamInfo_.artist.toStdWString();
+        // 引擎报不出总长时（流还没解析完）用搜索结果里的时长，避免挑到别的版本
+        const double sec = duration();
+        durationMs = sec > 0.5 ? static_cast<uint32_t>(sec * 1000.0)
+                               : static_cast<uint32_t>(streamInfo_.durationMs > 0 ? streamInfo_.durationMs : 0);
+    } else {
+        return;
+    }
+    // 全局断网时连歌词也不出去找，只用本地 / 内嵌
+    const bool online = QSettings().value("player/onlineLyrics", true).toBool() &&
+                        !SettingsService::Offline();
     const std::wstring cacheDir =
         (QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/lyrics")).toStdWString();
     QPointer<PlayerController> self(this);
@@ -1583,7 +1774,19 @@ void PlayerController::loadKugouLyrics() {
                 picked.title = parsed.title;
                 picked.artist = parsed.artist;
             }
-            if (!ok) return;
+            if (!ok) {
+                // 断网 / 休眠刚唤醒时网络栈还没就绪。给一次延迟重试，
+                // 否则这首歌会一直停在"没有歌词"，直到用户切歌再切回来。
+                QMetaObject::invokeMethod(QCoreApplication::instance(), [self, gen]() {
+                    if (!self || self->lyricsGen_ != gen || self->lyricRetry_ >= 1) return;
+                    ++self->lyricRetry_;
+                    QTimer::singleShot(4000, self, [self, gen]() {
+                        if (!self || self->lyricsGen_ != gen) return;
+                        self->loadKugouLyrics();
+                    });
+                }, Qt::QueuedConnection);
+                return;
+            }
             kind = QStringLiteral("online");
             label = QStringLiteral("在线 · ") + LyricSourceName(picked.source);
             detail = QString::fromStdWString(picked.artist.empty() ? picked.title : picked.title + L" - " + picked.artist);
@@ -1613,7 +1816,9 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
     lyricTimes_.clear();
     lyricIndex_ = -1;
     lyricsSynced_ = false;
-    if (current_ && !text.trimmed().isEmpty()) {
+    // 在线曲目没有曲库条目（current_ 为空），但歌词照样要能上屏 ——
+    // 以前这里只认 current_，导致在线播放抓到的歌词全被丢掉。
+    if ((current_ || streaming_) && !text.trimmed().isEmpty()) {
         static const QRegularExpression tagRe(QStringLiteral("\\[(\\d{1,3}):(\\d{1,2})(?:[.:](\\d{1,3}))?\\]"));
         static const QRegularExpression offRe(QStringLiteral("\\[offset:\\s*([+-]?\\d+)\\]"), QRegularExpression::CaseInsensitiveOption);
         static const QRegularExpression metaRe(QStringLiteral("^\\[[a-zA-Z]+:.*\\]$"));
@@ -1674,7 +1879,9 @@ void PlayerController::applyLyricsText(const QString& text, bool wholeFileTimeli
             }
             lines.swap(merged);
             // CUE 分轨:歌词时间轴通常按整轨计,换算到分轨起点
-            qint64 shift = wholeFileTimeline && current_->is_cue_track ? static_cast<qint64>(current_->cue_start_ms) : 0;
+            qint64 shift = wholeFileTimeline && current_ && current_->is_cue_track
+                               ? static_cast<qint64>(current_->cue_start_ms)
+                               : 0;
             for (size_t i = 0; i < lines.size(); ++i) {
                 const Line& l = lines[i];
                 if (l.time - shift < 0 && shift > 0) continue;
@@ -1715,7 +1922,14 @@ QString PlayerController::lyricAt(double seconds) const {
 }
 
 QString PlayerController::lyricQuery() const {
-    if (!current_) return {};
+    if (!current_) {
+        // 在线曲目：用流里的歌名 / 歌手拼查询词，不然面板连搜索框都是空的
+        if (!streaming_) return {};
+        const QString t = streamInfo_.title.trimmed();
+        const QString a = streamInfo_.artist.trimmed();
+        if (t.isEmpty()) return {};
+        return a.isEmpty() ? t : t + QLatin1Char(' ') + a;
+    }
     const QString title = Q(current_->title).trimmed();
     const QString artist = Q(current_->artist).trimmed();
     if (title.isEmpty()) return QFileInfo(Q(current_->file_path)).completeBaseName();
@@ -1725,7 +1939,8 @@ QString PlayerController::lyricQuery() const {
 // 歌词搜索:后台依次查各源,全部候选按匹配度排好交给歌词来源面板。
 // 搜索词没改过时按歌名 / 歌手 / 时长结构化查询;改过就把整串当作关键词。两种都不丢候选,由用户挑
 void PlayerController::searchLyrics(const QString& keyword) {
-    if (!current_) return;
+    // 在线曲目没有曲库条目（current_ 为空），但同样应该能查歌词库 / 在线歌词
+    if (!current_ && !streaming_) return;
     const QString kw = keyword.simplified();
     if (kw.isEmpty()) return;
     const quint64 gen = ++lyricSearchGen_;
@@ -1735,10 +1950,18 @@ void PlayerController::searchLyrics(const QString& keyword) {
 
     lyric_core::LyricQuery q;
     q.loose = true;
-    q.duration_ms = current_->duration_ms;
+    q.duration_ms = current_ ? static_cast<uint32_t>(current_->duration_ms)
+                             : static_cast<uint32_t>(streamInfo_.durationMs > 0
+                                   ? streamInfo_.durationMs
+                                   : duration() * 1000.0);
     if (kw == lyricQuery().simplified()) {
-        q.title = current_->title.empty() ? kw.toStdWString() : current_->title;
-        if (Q(current_->artist) != QStringLiteral("未知艺术家")) q.artist = current_->artist;
+        if (current_) {
+            q.title = current_->title.empty() ? kw.toStdWString() : current_->title;
+            if (Q(current_->artist) != QStringLiteral("未知艺术家")) q.artist = current_->artist;
+        } else {
+            q.title = streamInfo_.title.toStdWString();
+            q.artist = streamInfo_.artist.toStdWString();
+        }
     } else {
         q.title = kw.toStdWString();
     }
@@ -1799,7 +2022,9 @@ void PlayerController::searchLyrics(const QString& keyword) {
 
 // 换用第 index 个候选:后台拉取后立即显示 (不写盘,要留住请点「保存到本地」)
 void PlayerController::useLyricCandidate(int index) {
-    if (!current_ || index < 0 || index >= static_cast<int>(lyricCandRaw_.size())) return;
+    if ((!current_ && !streaming_) || index < 0 ||
+        index >= static_cast<int>(lyricCandRaw_.size()))
+        return;
     const lyric_core::LyricCandidate c = lyricCandRaw_[static_cast<size_t>(index)];
     const quint64 gen = ++lyricsGen_; // 自动查找的结果晚到也不会盖掉手选的
     // 从本地歌词换到在线候选:记下本地版,面板里可以「用本地歌词」换回

@@ -1,4 +1,5 @@
 #include "lyric_service.h"
+#include "settings_service.h"
 
 #include <QFileInfo>
 #include <QMetaObject>
@@ -80,6 +81,7 @@ bool LyricService::hasLrc(double trackId) const {
 
 void LyricService::fetchTracks(const QVariantList& ids) {
     if (busy_) return;
+    if (SettingsService::Offline()) return;   // 全局断网：不联网找歌词
     auto snap = lib_->snapshot();
     if (!snap) return;
 
