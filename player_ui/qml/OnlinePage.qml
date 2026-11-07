@@ -3,7 +3,8 @@ import PlayerUi
 
 // 在线页：榜单 / 搜索 / 扫码登录 / 边听边存
 //
-// 排版对齐本地曲库：标题 + 分段控件 + 搜索框，下面是「左榜单 / 右歌曲」或搜索的四段式。
+// 排版对齐本地搜索页：最佳匹配卡片 + 歌手带并排，往下是歌单带 / 专辑带 / 歌曲列表；
+// 分组之间只用一个「图标 + 数量」的分隔（Marker），不放文字标签。
 // 强调色**不写死**：全部取 Theme.accent（由当前播放曲目的封面主色驱动），
 // 所以在线内容不再是一块独立的冷蓝色，而是跟着歌一起变色。
 //
@@ -23,6 +24,25 @@ Item {
     readonly property bool hasMeta: online.tracks.length > 0
     // 内容整体换一批时压一下透明度再回来：一个动画顶替上百行的逐行动画
     property real contentFade: 1
+    // 结果换了要回到顶部：新内容比旧的矮/高，不重置就会停在半空
+    property bool pinTop: true
+    function rewind() { if (pinTop) searchView.positionViewAtBeginning() }
+
+    // 分组分隔：一个图标 + 数量，代替"歌单/歌手/专辑/歌曲"四个文字标签
+    component Marker: Row {
+        property string icon
+        property int count
+        height: visible ? 34 : 0
+        spacing: 8
+        leftPadding: 2
+        Icon { anchors.verticalCenter: parent.verticalCenter; name: parent.icon; size: 15; opacity: 0.45 }
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            text: parent.count.toLocaleString(Qt.locale(), "f", 0)
+            color: Theme.textTertiary
+            font.pixelSize: 12
+        }
+    }
 
     opacity: 0
     Component.onCompleted: {
@@ -41,7 +61,11 @@ Item {
         target: online
         function onToast(t) { Nav.toast("info", t) }
         function onListsChanged() { refreshFade.restart() }
-        function onTracksReset() { refreshFade.restart() }
+        function onTracksReset() {
+            refreshFade.restart()
+            page.pinTop = true
+            Qt.callLater(page.rewind)
+        }
     }
     NumberAnimation {
         id: refreshFade
@@ -514,6 +538,7 @@ Item {
             delegate: TrackLine {
                 required property int index
                 required property var modelData
+                rowIndex: index
                 width: trackList.width
                 title: modelData.title
                 subtitle: modelData.artist + (modelData.album.length ? " · " + modelData.album : "")
@@ -567,51 +592,48 @@ Item {
         Behavior on modeFade { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
         opacity: modeFade * page.contentFade
         visible: opacity > 0.01
-        SmoothScroll { flickable: searchView }
+        SmoothScroll { flickable: searchView; onScrolled: page.pinTop = false }
+        onMovementStarted: page.pinTop = false
 
         header: Item {
             width: searchView.width
             height: searchHead.height
+
             Column {
                 id: searchHead
                 width: parent.width
-                spacing: 20
+                spacing: 0
+                // 头部一变高就回到顶部，否则结果出来时页面停在半空
+                onHeightChanged: Qt.callLater(page.rewind)
 
-                // 歌手 / 专辑详情头：封面 + 标题 + 副标题 + 统计
+                // ── 歌手 / 专辑 / 歌单 详情头 ──────────────────────────
                 Rectangle {
-                    width: parent.width
-                    height: online.viewMode === 4 ? 176 : 148
-                    radius: 14
+                    id: detailCard
                     visible: online.isDetail
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: Theme.accentAlpha(0.13) }
-                        GradientStop { position: 0.55; color: Theme.accentAlpha(0.04) }
-                        GradientStop { position: 1.0; color: Theme.hover }
-                    }
+                    width: parent.width
+                    height: visible ? (online.viewMode === 4 ? 184 : 156) : 0
+                    radius: 18
+                    color: Theme.hover
+                    border.width: 1
+                    border.color: Theme.hairline
 
-                    SoftShadow {
-                        target: detailArt
-                        spread: 18
-                        offsetY: 8
-                        strength: 0.5
-                    }
+                    SoftShadow { target: detailArt; spread: 18; offsetY: 10; strength: 0.5 }
                     RoundedImage {
                         id: detailArt
-                        x: 20
+                        x: 22
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 104; height: 104
-                        radius: online.detailRound ? 52 : 10
+                        width: 108; height: 108
+                        radius: online.detailRound ? 54 : 10
                         decodeSize: 256
                         source: online.detailCover
                     }
                     Column {
                         anchors.left: detailArt.right
-                        anchors.leftMargin: 20
+                        anchors.leftMargin: 22
                         anchors.right: parent.right
                         anchors.rightMargin: 24
                         anchors.verticalCenter: parent.verticalCenter
-                        spacing: 8
+                        spacing: 5
                         Text {
                             width: parent.width
                             text: online.detailTitle
@@ -635,11 +657,10 @@ Item {
                             font.pixelSize: 11
                             elide: Text.ElideRight
                         }
-                        // 歌单才有的两个动作
                         Row {
                             visible: online.viewMode === 4
                             spacing: 10
-                            topPadding: 4
+                            topPadding: 2
                             Rectangle {
                                 width: 92; height: 28; radius: 14
                                 color: page.accent
@@ -684,10 +705,12 @@ Item {
                     }
                 }
 
+                Item { width: 1; height: detailCard.visible ? 20 : 0 }
+
                 // 歌单工具条：排序 / 倒序 / 列表内筛选
                 Row {
                     width: parent.width
-                    height: 30
+                    height: visible ? 30 : 0
                     spacing: 6
                     visible: online.viewMode === 4
 
@@ -764,7 +787,6 @@ Item {
                                 font.pixelSize: 11
                             }
                         }
-                        // 打字时不要每个字符都重建一次列表
                         Timer {
                             id: filterDebounce
                             interval: 220
@@ -781,330 +803,308 @@ Item {
                     }
                 }
 
-                // 最佳匹配：换一批结果时轻微上浮淡入，只动这一张卡片
-                Rectangle {
-                    id: bestCard
-                    width: parent.width
-                    height: 136
-                    radius: 14
-                    visible: page.best !== null && online.viewMode === 1
-                    opacity: 0
-                    transform: Translate { id: bestShift; y: 0 }
-                    gradient: Gradient {
-                        orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: Theme.accentAlpha(0.13) }
-                        GradientStop { position: 0.55; color: Theme.accentAlpha(0.04) }
-                        GradientStop { position: 1.0; color: Theme.hover }
-                    }
-                    ParallelAnimation {
-                        id: bestIn
-                        NumberAnimation { target: bestCard; property: "opacity"; from: 0; to: 1; duration: Theme.normal; easing.type: Easing.OutCubic }
-                        NumberAnimation { target: bestShift; property: "y"; from: 6; to: 0; duration: Theme.normal; easing.type: Easing.OutCubic }
-                    }
-                    Connections {
-                        target: online
-                        function onTracksReset() { bestIn.restart() }
-                    }
-                    Component.onCompleted: bestIn.start()
+                Item { width: 1; height: online.viewMode === 4 ? 14 : 0 }
 
-                    SoftShadow {
-                        target: bestCover
-                        spread: 18
-                        offsetY: 8
-                        strength: 0.5
-                    }
-                    RoundedImage {
-                        id: bestCover
-                        x: 18
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 100; height: 100
-                        radius: 10
-                        decodeSize: 208
-                        source: online.albums.length > 0 ? online.albums[0].cover : ""
-                    }
-                    Column {
-                        anchors.left: bestCover.right
-                        anchors.leftMargin: 18
-                        anchors.right: bestActions.left
-                        anchors.rightMargin: 20
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 7
-                        Text {
-                            width: parent.width
-                            text: page.best ? page.best.title : ""
-                            color: Theme.text
-                            font.pixelSize: 22
-                            font.weight: Font.Bold
-                            elide: Text.ElideRight
+                // ── 最佳匹配 + 歌手带 ──────────────────────────────────
+                Row {
+                    width: parent.width
+                    height: visible ? 196 : 0
+                    spacing: 28
+                    visible: online.viewMode === 1 && (bestCard.visible || online.artists.length > 0)
+
+                    Rectangle {
+                        id: bestCard
+                        visible: page.best !== null
+                        width: Math.min(420, parent.width * 0.42)
+                        height: 196
+                        radius: 18
+                        color: bestMouse.containsMouse ? Theme.pressed : Theme.hover
+                        border.width: 1
+                        border.color: Theme.hairline
+                        Behavior on color { ColorAnimation { duration: Theme.fast } }
+
+                        SoftShadow { target: bestArt; spread: 18; offsetY: 10; strength: 0.5 }
+                        RoundedImage {
+                            id: bestArt
+                            x: 22
+                            y: 22
+                            width: 92; height: 92
+                            radius: 10
+                            decodeSize: 208
+                            source: online.albums.length > 0 ? online.albums[0].cover : ""
                         }
-                        Text {
-                            width: parent.width
-                            text: page.best
-                                  ? page.best.artist + (page.best.album.length ? " · " + page.best.album : "")
-                                  : ""
-                            color: Theme.textSecondary
-                            font.pixelSize: 12
-                            elide: Text.ElideRight
-                        }
-                        Row {
-                            spacing: 8
-                            Rectangle {
-                                visible: page.best && page.best.paywalled
-                                width: 32; height: 16; radius: 4
-                                color: page.dim
-                                Text {
-                                    anchors.centerIn: parent
-                                    text: "VIP"
-                                    color: Theme.accent
-                                    font.pixelSize: 8
-                                }
+                        Column {
+                            x: 22
+                            anchors.bottom: parent.bottom
+                            anchors.bottomMargin: 20
+                            width: parent.width - 44 - 72
+                            spacing: 4
+                            Text {
+                                width: parent.width
+                                text: page.best ? page.best.title : ""
+                                color: Theme.text
+                                font.pixelSize: 22
+                                font.weight: Font.Bold
+                                elide: Text.ElideRight
                             }
                             Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: page.best ? page.best.duration : ""
-                                color: Theme.textTertiary
-                                font.pixelSize: 11
+                                width: parent.width
+                                text: page.best
+                                      ? page.best.artist + (page.best.album.length ? " · " + page.best.album : "")
+                                      : ""
+                                color: Theme.textSecondary
+                                font.pixelSize: 12
+                                elide: Text.ElideRight
                             }
                         }
-                    }
-                    Row {
-                        id: bestActions
-                        anchors.right: parent.right
-                        anchors.rightMargin: 20
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 10
-                        Rectangle {
-                            width: 42; height: 42; radius: 21
-                            color: page.accent
-                            scale: bestPlay.pressed ? 0.92 : (bestPlay.containsMouse ? 1.05 : 1.0)
-                            Behavior on color { ColorAnimation { duration: Theme.normal } }
-                            Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
-                            Icon {
-                                anchors.centerIn: parent
-                                name: online.playing === 0 && player.playing ? "pause" : "play"
-                                size: 14
-                                tint: Theme.onAccent
-                            }
-                            MouseArea {
-                                id: bestPlay
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: online.playing === 0 ? player.toggle() : online.play(0)
-                            }
-                        }
-                        Rectangle {
-                            width: 42; height: 42; radius: 21
-                            color: bestDl.containsMouse ? page.dim : "transparent"
-                            scale: bestDl.pressed ? 0.92 : (bestDl.containsMouse ? 1.05 : 1.0)
-                            border.width: 1
-                            border.color: bestDl.containsMouse ? Theme.accentAlpha(0.4) : Theme.hairline
-                            Behavior on color { ColorAnimation { duration: Theme.fast } }
-                            Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
-                            Icon {
-                                anchors.centerIn: parent
-                                name: "import"
-                                size: 15
-                                opacity: 0.6
-                                tint: Theme.textSecondary
-                            }
-                            MouseArea {
-                                id: bestDl
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: online.download(0)
-                            }
-                        }
-                    }
-                }
-
-                // 歌单：别人整理好的整列曲目，点进去就是一整列
-                Column {
-                    width: parent.width
-                    spacing: 10
-                    visible: online.playlists.length > 0 && online.viewMode === 1
-                    Text {
-                        text: qsTr("歌单")
-                        color: Theme.textTertiary
-                        font.pixelSize: 11
-                    }
-                    Row {
-                        spacing: 12
-                        Repeater {
-                            model: Math.min(online.playlists.length, 4)
-                            delegate: Item {
-                                required property int index
-                                width: (searchHead.width - 36) / 4
-                                height: width + 40
-
-                                RoundedImage {
-                                    width: parent.width
-                                    height: parent.width
-                                    radius: 10
-                                    decodeSize: 256
-                                    source: online.playlists[index].cover
-                                }
-                                Text {
-                                    y: parent.width + 8
-                                    width: parent.width
-                                    text: online.playlists[index].name
-                                    color: Theme.text
-                                    font.pixelSize: 12
-                                    elide: Text.ElideRight
-                                }
-                                Text {
-                                    y: parent.width + 25
-                                    width: parent.width
-                                    text: (online.playlists[index].creator.length > 0
-                                           ? online.playlists[index].creator + " · " : "")
-                                          + qsTr("%1 首").arg(online.playlists[index].count)
-                                    color: Theme.textTertiary
-                                    font.pixelSize: 10
-                                    elide: Text.ElideRight
+                        Row {
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: 16
+                            spacing: 10
+                            Rectangle {
+                                width: 42; height: 42; radius: 21
+                                color: page.accent
+                                scale: bestPlay.pressed ? 0.92 : (bestPlay.containsMouse ? 1.05 : 1.0)
+                                Behavior on color { ColorAnimation { duration: Theme.normal } }
+                                Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
+                                Icon {
+                                    anchors.centerIn: parent
+                                    name: online.playing === 0 && player.playing ? "pause" : "play"
+                                    size: 14
+                                    tint: Theme.onAccent
                                 }
                                 MouseArea {
-                                    anchors.fill: parent
-                                    cursorShape: Qt.PointingHandCursor
-                                    onClicked: online.openPlaylist(online.playlists[index].id || "",
-                                                                   online.playlists[index].name)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 歌手
-                Column {
-                    width: parent.width
-                    spacing: 10
-                    visible: online.artists.length > 0 && online.viewMode === 1
-                    Text {
-                        text: qsTr("歌手")
-                        color: Theme.textTertiary
-                        font.pixelSize: 11
-                    }
-                    Row {
-                        spacing: 10
-                        Repeater {
-                            model: Math.min(online.artists.length, 8)
-                            delegate: Rectangle {
-                                required property int index
-                                width: 136; height: 46; radius: 23
-                                color: artistMouse.containsMouse ? page.faint : "transparent"
-                                border.width: 1
-                                border.color: Theme.hairline
-                                Behavior on color { ColorAnimation { duration: Theme.fast } }
-                                Rectangle {
-                                    x: 6
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: 34; height: 34; radius: 17
-                                    color: page.dim
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: online.artists[index].name.charAt(0)
-                                        color: Theme.accent
-                                        font.pixelSize: 13
-                                        font.weight: Font.DemiBold
-                                    }
-                                }
-                                Column {
-                                    anchors.left: parent.left
-                                    anchors.leftMargin: 48
-                                    anchors.right: parent.right
-                                    anchors.rightMargin: 8
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    spacing: 1
-                                    Text {
-                                        width: parent.width
-                                        text: online.artists[index].name
-                                        color: Theme.text
-                                        font.pixelSize: 12
-                                        elide: Text.ElideRight
-                                    }
-                                    Text {
-                                        visible: online.artists[index].count > 0
-                                        text: qsTr("%1 首").arg(online.artists[index].count)
-                                        color: Theme.textTertiary
-                                        font.pixelSize: 10
-                                    }
-                                }
-                                MouseArea {
-                                    id: artistMouse
+                                    id: bestPlay
                                     anchors.fill: parent
                                     hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: online.openArtist(online.artists[index].id || "",
-                                                                 online.artists[index].name)
+                                    onClicked: online.playing === 0 ? player.toggle() : online.play(0)
                                 }
                             }
-                        }
-                    }
-                }
-
-                // 专辑
-                Column {
-                    width: parent.width
-                    spacing: 10
-                    visible: online.albums.length > 0 && online.viewMode === 1
-                    Text {
-                        text: qsTr("专辑")
-                        color: Theme.textTertiary
-                        font.pixelSize: 11
-                    }
-                    Row {
-                        spacing: 16
-                        Repeater {
-                            model: Math.min(online.albums.length, 7)
-                            delegate: Item {
-                                required property int index
-                                width: 128
-                                height: 182
-                                RoundedImage {
-                                    width: 128; height: 128
-                                    radius: 10
-                                    decodeSize: 256
-                                    source: online.albums[index].cover
-                                }
-                                Text {
-                                    y: 136
-                                    width: parent.width
-                                    text: online.albums[index].name
-                                    color: Theme.text
-                                    font.pixelSize: 12
-                                    elide: Text.ElideRight
-                                }
-                                Text {
-                                    y: 154
-                                    width: parent.width
-                                    text: online.albums[index].artist
-                                    color: Theme.textTertiary
-                                    font.pixelSize: 10
-                                    elide: Text.ElideRight
+                            Rectangle {
+                                width: 42; height: 42; radius: 21
+                                color: bestDl.containsMouse ? page.dim : "transparent"
+                                scale: bestDl.pressed ? 0.92 : (bestDl.containsMouse ? 1.05 : 1.0)
+                                border.width: 1
+                                border.color: bestDl.containsMouse ? Theme.accentAlpha(0.4) : Theme.hairline
+                                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
+                                Icon {
+                                    anchors.centerIn: parent
+                                    name: "import"
+                                    size: 15
+                                    opacity: 0.6
+                                    tint: Theme.textSecondary
                                 }
                                 MouseArea {
+                                    id: bestDl
                                     anchors.fill: parent
+                                    hoverEnabled: true
                                     cursorShape: Qt.PointingHandCursor
-                                    onClicked: online.openAlbum(online.albums[index].id || "",
-                                                                online.albums[index].name)
+                                    onClicked: online.download(0)
                                 }
+                            }
+                        }
+                        MouseArea {
+                            id: bestMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: online.playing === 0 ? player.toggle() : online.play(0)
+                        }
+                    }
+
+                    // 歌手：横向滑动，和本地搜索页同一套带式布局
+                    ListView {
+                        id: artistStrip
+                        width: parent.width - (bestCard.visible ? bestCard.width + 28 : 0)
+                        height: 196
+                        visible: online.artists.length > 0
+                        orientation: ListView.Horizontal
+                        spacing: 18
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: online.artists
+                        SmoothScroll { flickable: artistStrip; horizontal: true }
+                        delegate: Item {
+                            required property int index
+                            width: 128
+                            height: artistStrip.height
+                            readonly property bool hovered: am.containsMouse
+                            Rectangle {
+                                y: 22 + (parent.hovered ? -3 : 0)
+                                width: 128; height: 128; radius: 64
+                                color: page.dim
+                                Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: online.artists[index].name.charAt(0)
+                                    color: Theme.accent
+                                    font.pixelSize: 40
+                                    font.weight: Font.DemiBold
+                                }
+                            }
+                            Text {
+                                y: 160
+                                width: parent.width
+                                horizontalAlignment: Text.AlignHCenter
+                                text: online.artists[index].name
+                                color: parent.hovered ? Theme.accent : Theme.textSecondary
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                            }
+                            MouseArea {
+                                id: am
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: online.openArtist(online.artists[index].id || "",
+                                                              online.artists[index].name)
                             }
                         }
                     }
                 }
 
-                Text {
-                    visible: online.tracks.length > 0
-                    text: qsTr("歌曲")
-                    color: Theme.textTertiary
-                    font.pixelSize: 11
+                // ── 歌单带 ────────────────────────────────────────────
+                Marker {
+                    visible: online.viewMode === 1 && online.playlists.length > 0
+                    icon: "playlist"
+                    count: online.playlists.length
                 }
+                ListView {
+                    id: playlistStrip
+                    width: parent.width
+                    height: visible ? 76 : 0
+                    visible: online.viewMode === 1 && online.playlists.length > 0
+                    orientation: ListView.Horizontal
+                    spacing: 12
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: online.playlists
+                    SmoothScroll { flickable: playlistStrip; horizontal: true }
+                    delegate: Rectangle {
+                        required property int index
+                        width: 240; height: 72; radius: 12
+                        color: plMouse.containsMouse ? Theme.hover : "transparent"
+                        border.width: 1
+                        border.color: Theme.hairline
+                        Behavior on color { ColorAnimation { duration: Theme.fast } }
+                        RoundedImage {
+                            x: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 56; height: 56
+                            radius: 8
+                            decodeSize: 128
+                            source: online.playlists[index].cover
+                        }
+                        Column {
+                            x: 76
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - 88
+                            spacing: 4
+                            Text {
+                                width: parent.width
+                                text: online.playlists[index].name
+                                color: Theme.text
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                width: parent.width
+                                text: (online.playlists[index].creator.length > 0
+                                       ? online.playlists[index].creator + " · " : "")
+                                      + qsTr("%1 首").arg(online.playlists[index].count)
+                                color: Theme.textTertiary
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
+                        }
+                        MouseArea {
+                            id: plMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: online.openPlaylist(online.playlists[index].id || "",
+                                                           online.playlists[index].name)
+                        }
+                    }
+                }
+
+                // ── 专辑带 ────────────────────────────────────────────
+                Marker {
+                    visible: online.viewMode === 1 && online.albums.length > 0
+                    icon: "album-open"
+                    count: online.albums.length
+                }
+                ListView {
+                    id: albumStrip
+                    width: parent.width
+                    height: visible ? 208 : 0
+                    visible: online.viewMode === 1 && online.albums.length > 0
+                    orientation: ListView.Horizontal
+                    spacing: 22
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    model: online.albums
+                    SmoothScroll { flickable: albumStrip; horizontal: true }
+                    delegate: Item {
+                        required property int index
+                        width: 150
+                        height: 208
+                        readonly property bool hovered: albMouse.containsMouse
+                        RoundedImage {
+                            width: 150; height: 150
+                            radius: 8
+                            y: parent.hovered ? -3 : 0
+                            decodeSize: 300
+                            source: online.albums[index].cover
+                            Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+                        }
+                        Text {
+                            y: 160
+                            width: parent.width
+                            text: online.albums[index].name
+                            color: parent.hovered ? Theme.accent : Theme.text
+                            font.pixelSize: 13
+                            font.weight: Font.DemiBold
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            y: 180
+                            width: parent.width
+                            text: online.albums[index].artist
+                            color: Theme.textTertiary
+                            font.pixelSize: 11
+                            elide: Text.ElideRight
+                        }
+                        MouseArea {
+                            id: albMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: online.openAlbum(online.albums[index].id || "",
+                                                        online.albums[index].name)
+                        }
+                    }
+                }
+
+                // ── 歌曲 ──────────────────────────────────────────────
+                Marker {
+                    visible: online.tracks.length > 0
+                    icon: "note"
+                    count: online.tracks.length
+                }
+                Item { width: 1; height: 6 }
             }
         }
 
         delegate: TrackLine {
             required property int index
             required property var modelData
+            rowIndex: index
             width: searchView.width
             title: modelData.title
             subtitle: modelData.artist + (modelData.album.length ? " · " + modelData.album : "")

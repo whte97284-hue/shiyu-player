@@ -8,7 +8,9 @@ import PlayerUi
 // 强调色不写死，由页面传 Theme.accent 进来 —— 跟着当前播放曲目的封面主色走。
 Item {
     id: row
-    property int index: 0
+    // 序号由外面显式传进来（rowIndex）：和 delegate 的 model index 区分开，
+    // 否则同名属性会被 required 声明覆盖，所有行都显示 1
+    property int rowIndex: 0
     property string title: ""
     property string subtitle: ""
     property string duration: ""
@@ -56,7 +58,7 @@ Item {
         Text {
             anchors.centerIn: parent
             visible: !row.active
-            text: row.index + 1
+            text: row.rowIndex + 1
             color: Theme.textTertiary
             font.pixelSize: 11
         }
