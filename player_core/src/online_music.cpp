@@ -1054,6 +1054,89 @@ public:
         return out;
     }
 
+
+    // ── 歌单 ──────────────────────────────────────────────────────────
+    std::vector<PlaylistInfo> SearchPlaylists(const std::string& kw, int limit) override {
+        std::vector<PlaylistInfo> out;
+        if (kw.empty() || limit <= 0) return out;
+        HttpRequest req;
+        req.url = "https://mobilecdn.kugou.com/api/v3/search/special?format=json&keyword=" +
+                  UrlEncode(kw) + "&page=1&pagesize=" + std::to_string(std::min(limit, 30));
+        req.headers.push_back({"User-Agent", kUa});
+        HttpResponse resp;
+        if (!DoHttp(req, resp) || resp.status != 200) return out;
+        JValue root;
+        if (!ParseJson(resp.body, root)) return out;
+        const JValue* data = root.Find("data");
+        const JValue* info = data ? data->Find("info") : nullptr;
+        if (!info) return out;
+        for (size_t i = 0; i < info->Size(); ++i) {
+            const JValue* it = info->At(i);
+            if (!it) continue;
+            PlaylistInfo p;
+            p.id = std::to_string(it->I("specialid", 0));
+            p.name = it->S("specialname");
+            p.creator = it->S("nickname");
+            p.cover = KugouCover(it->S("imgurl"));
+            p.description = it->S("intro");
+            p.songCount = static_cast<int>(it->I("songcount", 0));
+            p.playCount = it->I("playcount", 0);
+            p.updateTime = it->S("publishtime");
+            if (p.id == "0" || p.name.empty()) continue;
+            out.push_back(std::move(p));
+        }
+        return out;
+    }
+
+    PlaylistInfo Playlist(const std::string& id) override {
+        PlaylistInfo p;
+        if (id.empty()) return p;
+        HttpRequest req;
+        req.url = "https://mobilecdn.kugou.com/api/v3/special/info?specialid=" + UrlEncode(id);
+        req.headers.push_back({"User-Agent", kUa});
+        HttpResponse resp;
+        if (!DoHttp(req, resp) || resp.status != 200) return p;
+        JValue root;
+        if (!ParseJson(resp.body, root)) return p;
+        const JValue* data = root.Find("data");
+        if (!data) return p;
+        p.id = std::to_string(data->I("specialid", 0));
+        p.name = data->S("specialname");
+        p.creator = data->S("nickname");
+        p.cover = KugouCover(data->S("imgurl"));
+        p.description = data->S("intro");
+        p.songCount = static_cast<int>(data->I("songcount", 0));
+        p.playCount = data->I("playcount", 0);
+        p.updateTime = data->S("publishtime");
+        return p;
+    }
+
+    std::vector<Track> PlaylistSongs(const std::string& id, int limit, int offset) override {
+        std::vector<Track> out;
+        if (id.empty() || limit <= 0) return out;
+        const int pageSize = std::min(limit, 100);
+        const int page = offset / pageSize + 1;
+        HttpRequest req;
+        req.url = "https://mobilecdn.kugou.com/api/v3/special/song?specialid=" + UrlEncode(id) +
+                  "&page=" + std::to_string(page) + "&pagesize=" + std::to_string(pageSize) +
+                  "&version=9108";
+        req.headers.push_back({"User-Agent", kUa});
+        HttpResponse resp;
+        if (!DoHttp(req, resp) || resp.status != 200) return out;
+        JValue root;
+        if (!ParseJson(resp.body, root)) return out;
+        const JValue* data = root.Find("data");
+        const JValue* info = data ? data->Find("info") : nullptr;
+        if (!info) return out;
+        for (size_t i = 0; i < info->Size(); ++i) {
+            const JValue* it = info->At(i);
+            if (!it) continue;
+            Track t = FromNode(*it);
+            if (!t.id.empty()) out.push_back(std::move(t));
+        }
+        return out;
+    }
+
     Resolved Resolve(const Track& track) override {
         if (track.id.empty()) {
             Resolved r;
@@ -1434,6 +1517,93 @@ public:
             if (!it) continue;
             Track t = FromNode(*it);
             if (t.albumId.empty()) t.albumId = id;
+            if (!t.id.empty()) out.push_back(std::move(t));
+        }
+        return out;
+    }
+
+
+    // ── 歌单 ──────────────────────────────────────────────────────────
+    std::vector<PlaylistInfo> SearchPlaylists(const std::string& kw, int limit) override {
+        std::vector<PlaylistInfo> out;
+        if (kw.empty() || limit <= 0) return out;
+        JValue root;
+        if (!Fetch("https://music.163.com/api/search/get?s=" + UrlEncode(kw) +
+                       "&type=1000&limit=" + std::to_string(std::min(limit, 30)) + "&offset=0",
+                   root))
+            return out;
+        const JValue* result = root.Find("result");
+        const JValue* arr = result ? result->Find("playlists") : nullptr;
+        if (!arr) return out;
+        for (size_t i = 0; i < arr->Size(); ++i) {
+            const JValue* it = arr->At(i);
+            if (!it) continue;
+            PlaylistInfo p;
+            p.id = std::to_string(it->I("id", 0));
+            p.name = it->S("name");
+            p.cover = it->S("coverImgUrl");
+            p.description = it->S("description");
+            p.songCount = static_cast<int>(it->I("trackCount", 0));
+            p.playCount = it->I("playCount", 0);
+            const JValue* c = it->Find("creator");
+            if (c) p.creator = c->S("nickname");
+            if (p.id == "0" || p.name.empty()) continue;
+            out.push_back(std::move(p));
+        }
+        return out;
+    }
+
+    PlaylistInfo Playlist(const std::string& id) override {
+        PlaylistInfo p;
+        if (id.empty()) return p;
+        JValue root;
+        if (!Fetch("https://music.163.com/api/v6/playlist/detail?id=" + UrlEncode(id), root)) return p;
+        const JValue* pl = root.Find("playlist");
+        if (!pl) return p;
+        p.id = std::to_string(pl->I("id", 0));
+        p.name = pl->S("name");
+        p.cover = pl->S("coverImgUrl");
+        p.description = pl->S("description");
+        p.songCount = static_cast<int>(pl->I("trackCount", 0));
+        p.playCount = pl->I("playCount", 0);
+        p.updateTime = std::to_string(pl->I("updateTime", 0));
+        const JValue* c = pl->Find("creator");
+        if (c) p.creator = c->S("nickname");
+        return p;
+    }
+
+    // v6/playlist/detail 只给前 10 首，完整列表要先取 trackIds 再按批查详情
+    std::vector<Track> PlaylistSongs(const std::string& id, int limit, int offset) override {
+        std::vector<Track> out;
+        if (id.empty() || limit <= 0) return out;
+        JValue root;
+        if (!Fetch("https://music.163.com/api/v6/playlist/detail?id=" + UrlEncode(id), root)) return out;
+        const JValue* pl = root.Find("playlist");
+        const JValue* ids = pl ? pl->Find("trackIds") : nullptr;
+        if (!ids) return out;
+
+        const int total = static_cast<int>(ids->Size());
+        const int begin = std::min(offset, total);
+        const int end = std::min(begin + limit, total);
+        if (begin >= end) return out;
+
+        // 一次最多查 100 首，按批拼接
+        std::string q;
+        for (int i = begin; i < end; ++i) {
+            const JValue* e = ids->At(static_cast<size_t>(i));
+            if (!e) continue;
+            if (!q.empty()) q += ",";
+            q += std::to_string(e->I("id", 0));
+        }
+        if (q.empty()) return out;
+        JValue det;
+        if (!Fetch("https://music.163.com/api/song/detail?ids=[" + q + "]", det)) return out;
+        const JValue* songs = det.Find("songs");
+        if (!songs) return out;
+        for (size_t i = 0; i < songs->Size(); ++i) {
+            const JValue* it = songs->At(i);
+            if (!it) continue;
+            Track t = FromNode(*it);
             if (!t.id.empty()) out.push_back(std::move(t));
         }
         return out;

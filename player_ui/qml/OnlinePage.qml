@@ -580,7 +580,7 @@ Item {
                 // 歌手 / 专辑详情头：封面 + 标题 + 副标题 + 统计
                 Rectangle {
                     width: parent.width
-                    height: 148
+                    height: online.viewMode === 4 ? 176 : 148
                     radius: 14
                     visible: online.isDetail
                     gradient: Gradient {
@@ -635,6 +635,149 @@ Item {
                             font.pixelSize: 11
                             elide: Text.ElideRight
                         }
+                        // 歌单才有的两个动作
+                        Row {
+                            visible: online.viewMode === 4
+                            spacing: 10
+                            topPadding: 4
+                            Rectangle {
+                                width: 92; height: 28; radius: 14
+                                color: page.accent
+                                scale: playAllMouse.pressed ? 0.94 : (playAllMouse.containsMouse ? 1.04 : 1.0)
+                                Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: qsTr("播放全部")
+                                    color: Theme.onAccent
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                }
+                                MouseArea {
+                                    id: playAllMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: online.playAll()
+                                }
+                            }
+                            Rectangle {
+                                width: 92; height: 28; radius: 14
+                                color: dlAllMouse.containsMouse ? page.dim : "transparent"
+                                border.width: 1
+                                border.color: dlAllMouse.containsMouse ? Theme.accentAlpha(0.4) : Theme.hairline
+                                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: qsTr("下载全部")
+                                    color: Theme.textSecondary
+                                    font.pixelSize: 11
+                                }
+                                MouseArea {
+                                    id: dlAllMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: online.downloadAll()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 歌单工具条：排序 / 倒序 / 列表内筛选
+                Row {
+                    width: parent.width
+                    height: 30
+                    spacing: 6
+                    visible: online.viewMode === 4
+
+                    Repeater {
+                        model: [{ t: qsTr("默认"), k: 0 }, { t: qsTr("歌名"), k: 1 },
+                                { t: qsTr("歌手"), k: 2 }, { t: qsTr("时长"), k: 3 }]
+                        delegate: Rectangle {
+                            required property int index
+                            required property var modelData
+                            width: 54; height: 28; radius: 14
+                            color: online.sortKey === modelData.k ? page.accentAlpha(0.16)
+                                                                 : (sortMouse.containsMouse ? Theme.hover : "transparent")
+                            border.width: 1
+                            border.color: online.sortKey === modelData.k ? Theme.accentAlpha(0.5) : Theme.hairline
+                            Behavior on color { ColorAnimation { duration: Theme.fast } }
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.t
+                                color: online.sortKey === modelData.k ? Theme.accent : Theme.textSecondary
+                                font.pixelSize: 11
+                            }
+                            MouseArea {
+                                id: sortMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: online.setSort(modelData.k, online.sortDesc)
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: 66; height: 28; radius: 14
+                        color: online.sortDesc ? page.accentAlpha(0.16)
+                                               : (descMouse.containsMouse ? Theme.hover : "transparent")
+                        border.width: 1
+                        border.color: online.sortDesc ? Theme.accentAlpha(0.5) : Theme.hairline
+                        Behavior on color { ColorAnimation { duration: Theme.fast } }
+                        Text {
+                            anchors.centerIn: parent
+                            text: online.sortDesc ? qsTr("↓ 倒序") : qsTr("↑ 正序")
+                            color: online.sortDesc ? Theme.accent : Theme.textSecondary
+                            font.pixelSize: 11
+                        }
+                        MouseArea {
+                            id: descMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: online.setSort(online.sortKey, !online.sortDesc)
+                        }
+                    }
+
+                    Rectangle {
+                        width: 176; height: 28; radius: 14
+                        color: Theme.hover
+                        border.width: 1
+                        border.color: filterInput.activeFocus ? Theme.accentAlpha(0.5) : Theme.hairline
+                        TextInput {
+                            id: filterInput
+                            anchors.fill: parent
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 10
+                            verticalAlignment: TextInput.AlignVCenter
+                            color: Theme.text
+                            font.pixelSize: 11
+                            clip: true
+                            onTextChanged: filterDebounce.restart()
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                visible: filterInput.text.length === 0
+                                text: qsTr("在歌单里筛选")
+                                color: Theme.textTertiary
+                                font.pixelSize: 11
+                            }
+                        }
+                        // 打字时不要每个字符都重建一次列表
+                        Timer {
+                            id: filterDebounce
+                            interval: 220
+                            onTriggered: online.setFilter(filterInput.text)
+                        }
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        leftPadding: 6
+                        text: qsTr("%1 / %2").arg(online.tracks.length).arg(online.baseCount)
+                        color: Theme.textTertiary
+                        font.pixelSize: 11
                     }
                 }
 
@@ -771,6 +914,61 @@ Item {
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: online.download(0)
+                            }
+                        }
+                    }
+                }
+
+                // 歌单：别人整理好的整列曲目，点进去就是一整列
+                Column {
+                    width: parent.width
+                    spacing: 10
+                    visible: online.playlists.length > 0 && online.viewMode === 1
+                    Text {
+                        text: qsTr("歌单")
+                        color: Theme.textTertiary
+                        font.pixelSize: 11
+                    }
+                    Row {
+                        spacing: 12
+                        Repeater {
+                            model: Math.min(online.playlists.length, 4)
+                            delegate: Item {
+                                required property int index
+                                width: (searchHead.width - 36) / 4
+                                height: width + 40
+
+                                RoundedImage {
+                                    width: parent.width
+                                    height: parent.width
+                                    radius: 10
+                                    decodeSize: 256
+                                    source: online.playlists[index].cover
+                                }
+                                Text {
+                                    y: parent.width + 8
+                                    width: parent.width
+                                    text: online.playlists[index].name
+                                    color: Theme.text
+                                    font.pixelSize: 12
+                                    elide: Text.ElideRight
+                                }
+                                Text {
+                                    y: parent.width + 25
+                                    width: parent.width
+                                    text: (online.playlists[index].creator.length > 0
+                                           ? online.playlists[index].creator + " · " : "")
+                                          + qsTr("%1 首").arg(online.playlists[index].count)
+                                    color: Theme.textTertiary
+                                    font.pixelSize: 10
+                                    elide: Text.ElideRight
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: online.openPlaylist(online.playlists[index].id || "",
+                                                                   online.playlists[index].name)
+                                }
                             }
                         }
                     }

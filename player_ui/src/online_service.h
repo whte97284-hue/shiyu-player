@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <functional>
+#include <deque>
 #include <memory>
 #include <string>
 #include <thread>
@@ -47,6 +48,13 @@ class OnlineService : public QObject {
     Q_PROPERTY(QString detailMeta READ detailMeta NOTIFY viewChanged)
     Q_PROPERTY(bool detailRound READ detailRound NOTIFY viewChanged)   // 歌手头像是圆的
     Q_PROPERTY(bool canLoadMore READ canLoadMore NOTIFY tracksChanged)
+    // 歌单视图的排序 / 筛选（只作用于当前这一屏，不改原始顺序）
+    Q_PROPERTY(int sortKey READ sortKey NOTIFY viewChanged)
+    Q_PROPERTY(bool sortDesc READ sortDesc NOTIFY viewChanged)
+    Q_PROPERTY(QString filterText READ filterText NOTIFY viewChanged)
+    Q_PROPERTY(int baseCount READ baseCount NOTIFY viewChanged)
+    // 搜索结果里的歌单（别人整理的整列曲目）
+    Q_PROPERTY(QVariantList playlists READ playlists NOTIFY tracksChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(int source READ source WRITE setSource NOTIFY sourceChanged)
@@ -84,6 +92,11 @@ public:
     QString detailMeta() const { return detailMeta_; }
     bool detailRound() const { return viewMode_ == 2; }
     bool canLoadMore() const { return canMore_; }
+    int sortKey() const { return sortKey_; }
+    bool sortDesc() const { return sortDesc_; }
+    QString filterText() const { return filterText_; }
+    int baseCount() const { return static_cast<int>(baseRaw_.size()); }
+    QVariantList playlists() const { return playlists_; }
     bool busy() const { return busy_; }
     QString status() const { return status_; }
     int source() const { return source_; }
@@ -112,6 +125,12 @@ public:
     // 进歌手 / 专辑页：id 为空时按名字反查（酷狗曲目搜索不带 singerid）
     Q_INVOKABLE void openArtist(const QString& id, const QString& name);
     Q_INVOKABLE void openAlbum(const QString& id, const QString& name);
+    Q_INVOKABLE void openPlaylist(const QString& id, const QString& name);
+    // 排序：0 默认 / 1 歌名 / 2 歌手 / 3 时长
+    Q_INVOKABLE void setSort(int key, bool desc);
+    Q_INVOKABLE void setFilter(const QString& text);
+    Q_INVOKABLE void downloadAll();
+    Q_INVOKABLE void playAll();
     Q_INVOKABLE void back();                   // 从歌手/专辑页返回上一屏
     Q_INVOKABLE void loadMore();               // 搜索结果 / 歌手页加载更多
     Q_INVOKABLE void play(int row);            // 下载并播放
@@ -155,6 +174,9 @@ private:
     void PushSnapshot();
     // 换了一批歌曲后，把"正在播放"的行号按 歌名+歌手 重新对上（对不上就清掉）
     void SyncPlayingRow();
+    // 按当前排序 / 筛选重建 raw_ + tracks_（baseRaw_ 保留原始顺序）
+    void ApplyView();
+    void StartNextDownload();
     // 全局断网时拦下所有联网操作（返回 true 表示已拦下）
     bool Blocked();
     // 流式源只能跳到已下载的范围：恢复进度时反复试，直到数据追上
@@ -184,6 +206,7 @@ private:
     QVariantList tracks_;
     QVariantList artists_;
     QVariantList albums_;
+    QVariantList playlists_;
     int viewMode_ = 0;   // 0 榜单 / 1 搜索 / 2 歌手 / 3 专辑
     // 详情页头部
     QString detailTitle_, detailSubtitle_, detailCover_, detailMeta_;
@@ -198,6 +221,12 @@ private:
         int listRow = -1;
     };
     std::vector<Snapshot> stack_;
+    // 歌单的原始顺序：排序 / 筛选都从它重新算，不做原地改动
+    std::vector<online_core::Track> baseRaw_;
+    int sortKey_ = 0;
+    bool sortDesc_ = false;
+    QString filterText_;
+    std::deque<int> downloadQueue_;
     int listRow_ = -1;   // 当前打开的榜单下标：搜索完返回浏览态要原样拉回来
     std::vector<online_core::Track> raw_;
 

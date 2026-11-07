@@ -81,6 +81,19 @@ struct ArtistInfo {
     int albumCount = 0;
 };
 
+// 歌单（别人整理好的整列曲目）。和 SongList（榜单）不是一回事：
+// 榜单是平台固定的，歌单是用户/编辑做的，数量级和字段都不同。
+struct PlaylistInfo {
+    std::string id;
+    std::string name;
+    std::string creator;
+    std::string cover;      // 可能含 {size} 模板
+    std::string description;
+    int songCount = 0;
+    long long playCount = 0;
+    std::string updateTime;
+};
+
 struct AlbumInfo {
     std::string id;
     std::string name;
@@ -204,6 +217,15 @@ public:
     }
     virtual AlbumInfo Album(const std::string& /*id*/) { return {}; }
     virtual std::vector<Track> AlbumSongs(const std::string& /*id*/, int /*limit*/) { return {}; }
+
+    // ── 歌单 ──────────────────────────────────────────────────────────
+    virtual std::vector<PlaylistInfo> SearchPlaylists(const std::string& /*kw*/, int /*limit*/) {
+        return {};
+    }
+    virtual PlaylistInfo Playlist(const std::string& /*id*/) { return {}; }
+    virtual std::vector<Track> PlaylistSongs(const std::string& /*id*/, int /*limit*/, int /*offset*/) {
+        return {};
+    }
 
     // 设置账号后，酷狗侧才会走 v5/url 拿 VIP 直链。
     virtual void SetAccount(const Account&) {}

@@ -257,9 +257,17 @@ OnlineService::OnlineService(LibraryService* lib, PlayerController* player, QObj
             play(row);
         });
         connect(player_, &PlayerController::streamEnded, this, [this]() {
+            const int finished = playing_;
             if (playing_ >= 0) {
                 playing_ = -1;
                 emit playingChanged();
+            }
+            // 歌单里点一首就是"整列听下去"：自然播完自动接下一首
+            if (finished >= 0 && viewMode_ == 4 &&
+                finished + 1 < static_cast<int>(raw_.size())) {
+                if (!autoSave_) PurgeCacheDir();
+                play(finished + 1);
+                return;
             }
             if (autoSave_) return;
             // 晚一点再删：引擎刚松开文件句柄，立刻删 Windows 会拒绝
@@ -453,6 +461,7 @@ void OnlineService::restoreStream(const QVariantMap& m, double position) {
     tracks_.append(TrackToMap(t));
     artists_.clear();
     albums_.clear();
+    playlists_.clear();
     viewMode_ = 1;
     listName_ = tr("上次播放");
     canMore_ = false;
@@ -522,6 +531,7 @@ void OnlineService::setSource(int s) {
     tracks_.clear();
     artists_.clear();
     albums_.clear();
+    playlists_.clear();
     viewMode_ = 0;
     stack_.clear();
     listRow_ = -1;
@@ -588,6 +598,7 @@ void OnlineService::openList(int row) {
     raw_.clear();
     artists_.clear();
     albums_.clear();
+    playlists_.clear();
     canMore_ = false;
     if (viewMode_ != 0) { viewMode_ = 0; emit viewChanged(); }
     emit tracksChanged();
@@ -615,6 +626,7 @@ void OnlineService::openList(int row) {
                 SyncPlayingRow();
                 artists_.clear();
                 albums_.clear();
+                playlists_.clear();
                 viewMode_ = 0;
                 listName_ = name;
                 emit tracksChanged();
@@ -639,6 +651,7 @@ void OnlineService::backToLists() {
         tracks_.clear();
         artists_.clear();
         albums_.clear();
+        playlists_.clear();
         emit tracksChanged();
         emit tracksReset();
     }
@@ -675,6 +688,7 @@ void OnlineService::openArtist(const QString& id, const QString& name) {
     raw_.clear();
     artists_.clear();
     albums_.clear();
+    playlists_.clear();
     emit viewChanged();
     emit tracksChanged();
     emit tracksReset();
@@ -752,6 +766,7 @@ void OnlineService::openAlbum(const QString& id, const QString& name) {
     raw_.clear();
     artists_.clear();
     albums_.clear();
+    playlists_.clear();
     emit viewChanged();
     emit tracksChanged();
     emit tracksReset();
@@ -804,6 +819,167 @@ void OnlineService::openAlbum(const QString& id, const QString& name) {
     });
 }
 
+// ── 歌单 ─────────────────────────────────────────────────────────────────
+
+void OnlineService::openPlaylist(const QString& id, const QString& name) {
+    if (id.isEmpty() || Blocked()) return;
+    PushSnapshot();
+
+    viewMode_ = 4;
+    detailId_ = id;
+    detailTitle_ = name;
+    detailSubtitle_.clear();
+    detailCover_.clear();
+    detailMeta_ = tr("加载中…");
+    canMore_ = false;
+    baseRaw_.clear();
+    sortKey_ = 0;
+    sortDesc_ = false;
+    filterText_.clear();
+    tracks_.clear();
+    raw_.clear();
+    artists_.clear();
+    albums_.clear();
+    playlists_.clear();
+    emit viewChanged();
+    emit tracksChanged();
+    emit tracksReset();
+    SetBusy(true);
+
+    const int src = source_;
+    Provider* p = ProviderFor(src);
+    if (!p) return;
+
+    RunAsync([this, p, src, id = id.toStdString(), name = name.toStdString()]() {
+        PlaylistInfo info = p->Playlist(id);
+        auto songs = p->PlaylistSongs(id, 100, 0);
+
+        QVariantList out;
+        std::vector<Track> raw;
+        for (const auto& t : songs) {
+            out.append(TrackToMap(t));
+            raw.push_back(t);
+        }
+
+        const QString title = info.name.empty() ? ToQ(name) : ToQ(info.name);
+        QString meta;
+        if (info.songCount > 0) meta = tr("%1 首").arg(info.songCount);
+        if (info.playCount > 0) {
+            const QString pv = info.playCount >= 10000
+                                   ? tr("%1 万播放").arg(QString::number(info.playCount / 10000.0, 'f', 1))
+                                   : tr("%1 播放").arg(info.playCount);
+            meta = meta.isEmpty() ? pv : meta + " · " + pv;
+        }
+        if (meta.isEmpty()) meta = tr("%1 首").arg(raw.size());
+        const QString cover = ToQ(info.cover);
+        const QString creator = ToQ(info.creator);
+        const bool more = static_cast<int>(songs.size()) >= 100;
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, out, raw, src, more, title, creator, meta, cover]() {
+                if (src != source_ || viewMode_ != 4) return;
+                baseRaw_ = raw;
+                tracks_ = out;
+                raw_ = std::move(raw);
+                canMore_ = more;
+                detailTitle_ = title;
+                detailSubtitle_ = creator;
+                detailMeta_ = meta;
+                detailCover_ = cover;
+                SyncPlayingRow();
+                emit viewChanged();
+                emit tracksChanged();
+                emit tracksReset();
+                SetBusy(false);
+                SetStatus(tracks_.isEmpty() ? tr("没拿到这个歌单的歌") : QString());
+            },
+            Qt::QueuedConnection);
+    });
+}
+
+// 排序 / 筛选只改这一屏：从 baseRaw_ 重新算，原始顺序永远不丢
+void OnlineService::ApplyView() {
+    std::vector<Track> v;
+    v.reserve(baseRaw_.size());
+    const QString f = filterText_.trimmed();
+    for (const auto& t : baseRaw_) {
+        if (!f.isEmpty()) {
+            const QString hay = ToQ(t.title) + QLatin1Char(' ') + ToQ(t.artist) +
+                                QLatin1Char(' ') + ToQ(t.album);
+            if (!hay.contains(f, Qt::CaseInsensitive)) continue;
+        }
+        v.push_back(t);
+    }
+    if (sortKey_ == 1) {
+        std::stable_sort(v.begin(), v.end(), [](const Track& a, const Track& b) {
+            return QString::localeAwareCompare(ToQ(a.title), ToQ(b.title)) < 0;
+        });
+    } else if (sortKey_ == 2) {
+        std::stable_sort(v.begin(), v.end(), [](const Track& a, const Track& b) {
+            return QString::localeAwareCompare(ToQ(a.artist), ToQ(b.artist)) < 0;
+        });
+    } else if (sortKey_ == 3) {
+        std::stable_sort(v.begin(), v.end(),
+                         [](const Track& a, const Track& b) { return a.durationMs < b.durationMs; });
+    }
+    if (sortDesc_) std::reverse(v.begin(), v.end());
+
+    raw_ = v;
+    tracks_.clear();
+    for (const auto& t : v) tracks_.append(TrackToMap(t));
+    SyncPlayingRow();
+    emit tracksChanged();
+    emit tracksReset();
+}
+
+void OnlineService::setSort(int key, bool desc) {
+    if (!downloadQueue_.empty()) return;   // 批量下载用的是行号，重排会让它错位
+    if (sortKey_ == key && sortDesc_ == desc) return;
+    sortKey_ = key;
+    sortDesc_ = desc;
+    emit viewChanged();
+    ApplyView();
+}
+
+void OnlineService::setFilter(const QString& text) {
+    if (!downloadQueue_.empty()) return;
+    if (filterText_ == text) return;
+    filterText_ = text;
+    emit viewChanged();
+    ApplyView();
+}
+
+void OnlineService::playAll() {
+    if (raw_.empty()) return;
+    play(0);
+}
+
+void OnlineService::downloadAll() {
+    if (Blocked() || baseRaw_.empty()) return;
+    // 「下载全部」就是整张歌单：先把筛选清掉，让列表和实际下载范围一致
+    if (!filterText_.isEmpty()) {
+        filterText_.clear();
+        emit viewChanged();
+        ApplyView();
+    }
+    downloadQueue_.clear();
+    for (int i = 0; i < static_cast<int>(raw_.size()); ++i) downloadQueue_.push_back(i);
+    SetStatus(tr("开始下载 %1 首").arg(downloadQueue_.size()));
+    StartNextDownload();
+}
+
+void OnlineService::StartNextDownload() {
+    if (downloadQueue_.empty()) {
+        SetStatus(tr("下载完成"));
+        return;
+    }
+    const int row = downloadQueue_.front();
+    downloadQueue_.pop_front();
+    SetStatus(tr("下载中 · 还剩 %1 首").arg(downloadQueue_.size() + 1));
+    download(row);
+}
+
 void OnlineService::back() {
     if (stack_.empty()) {
         backToLists();
@@ -836,13 +1012,15 @@ void OnlineService::back() {
 
 void OnlineService::loadMore() {
     if (Blocked()) return;
-    if (!canMore_ || (viewMode_ != 1 && viewMode_ != 2)) return;
+    if (!canMore_ || (viewMode_ != 1 && viewMode_ != 2 && viewMode_ != 4)) return;
     const int src = source_;
     Provider* p = ProviderFor(src);
     if (!p) return;
 
     const int mode = viewMode_;
-    const int offset = static_cast<int>(raw_.size());
+    // 歌单的偏移要按原始列表算：排序 / 筛选后的 raw_ 顺序和接口不一致
+    const int offset = (viewMode_ == 4) ? static_cast<int>(baseRaw_.size())
+                                        : static_cast<int>(raw_.size());
     const int limit = 100;
     const std::string id = detailId_.toStdString();
     const std::string key = keyword_.toStdString();
@@ -852,7 +1030,9 @@ void OnlineService::loadMore() {
     SetBusy(true);
 
     RunAsync([this, p, src, mode, offset, limit, id, key]() {
-        auto songs = mode == 2 ? p->ArtistSongs(id, limit, offset) : p->Search(key, limit, offset);
+        auto songs = mode == 2 ? p->ArtistSongs(id, limit, offset)
+                   : mode == 4 ? p->PlaylistSongs(id, limit, offset)
+                               : p->Search(key, limit, offset);
         QVariantList add;
         std::vector<Track> rawAdd;
         for (const auto& t : songs) {
@@ -864,10 +1044,17 @@ void OnlineService::loadMore() {
             this,
             [this, add, rawAdd, src, mode, more]() {
                 if (src != source_ || viewMode_ != mode) return;
-                tracks_ += add;
-                raw_.insert(raw_.end(), rawAdd.begin(), rawAdd.end());
-                canMore_ = more;
-                emit tracksChanged();
+                if (mode == 4) {
+                    // 歌单：追加到原始列表再整体重排，保证排序 / 筛选仍然成立
+                    baseRaw_.insert(baseRaw_.end(), rawAdd.begin(), rawAdd.end());
+                    canMore_ = more;
+                    ApplyView();
+                } else {
+                    tracks_ += add;
+                    raw_.insert(raw_.end(), rawAdd.begin(), rawAdd.end());
+                    canMore_ = more;
+                    emit tracksChanged();
+                }
                 SetBusy(false);
                 SetStatus(QString());
             },
@@ -895,6 +1082,7 @@ void OnlineService::search(const QString& kw) {
     raw_.clear();
     artists_.clear();
     albums_.clear();
+    playlists_.clear();
     emit tracksChanged();
 
     RunAsync([this, p, src, key = kw.toStdString()]() {
@@ -987,6 +1175,32 @@ void OnlineService::search(const QString& kw) {
                 SetStatus(out.isEmpty() ? tr("没有结果") : QString());
             },
             Qt::QueuedConnection);
+
+        // 歌单：平台侧的"别人整理好的整列曲目"，和曲目搜索是两个接口
+        {
+            auto pls = p->SearchPlaylists(key, 6);
+            if (!pls.empty()) {
+                QVariantList pv;
+                for (const auto& pl : pls) {
+                    QVariantMap m;
+                    m["id"] = ToQ(pl.id);
+                    m["name"] = ToQ(pl.name);
+                    m["creator"] = ToQ(pl.creator);
+                    m["cover"] = ToQ(pl.cover);
+                    m["count"] = pl.songCount;
+                    m["playCount"] = pl.playCount;
+                    pv.append(m);
+                }
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, pv, src]() {
+                        if (src != source_ || viewMode_ != 1) return;
+                        playlists_ = pv;
+                        emit tracksChanged();
+                    },
+                    Qt::QueuedConnection);
+            }
+        }
 
         // 歌手实体：曲目搜索不带 singerid，单独查一次。查到就换成带 id 的版本 ——
         // 点歌手才能进「他的全部歌曲」；查不到就保留按名字归并的那份，点的时候再反查。
@@ -1150,6 +1364,7 @@ void OnlineService::play(int row) {
             if (save)
                 QMetaObject::invokeMethod(this, [this, path]() { ImportAndPlay(path, false); },
                                           Qt::QueuedConnection);
+            QMetaObject::invokeMethod(this, [this]() { StartNextDownload(); }, Qt::QueuedConnection);
             return;
         }
 #ifdef _WIN32
@@ -1168,6 +1383,7 @@ void OnlineService::play(int row) {
                 SetProgress(0);
                 if (!ok) {
                     SetStatus(tr("保存失败"));
+                    StartNextDownload();
                     return;
                 }
                 if (save) {
@@ -1176,6 +1392,7 @@ void OnlineService::play(int row) {
                 } else {
                     SetStatus(tr("已缓存，播完清理"));
                 }
+                StartNextDownload();
             },
             Qt::QueuedConnection);
     });
