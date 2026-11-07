@@ -191,7 +191,7 @@ Item {
             MouseArea {
                 id: playMouse
                 anchors.fill: parent
-                hoverEnabled: true
+                hoverEnabled: !Theme.scrolling
                 cursorShape: Qt.PointingHandCursor
                 onClicked: if (!row.pending) row.played()
             }
@@ -212,7 +212,7 @@ Item {
             MouseArea {
                 id: dlMouse
                 anchors.fill: parent
-                hoverEnabled: true
+                hoverEnabled: !Theme.scrolling
                 cursorShape: Qt.PointingHandCursor
                 onClicked: row.downloaded()
             }
@@ -223,7 +223,7 @@ Item {
         id: hover
         anchors.fill: parent
         anchors.rightMargin: 70
-        hoverEnabled: true
+        hoverEnabled: !Theme.scrolling
         acceptedButtons: Qt.NoButton
     }
 }

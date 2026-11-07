@@ -1153,78 +1153,58 @@ void OnlineService::search(const QString& kw) {
             return v;
         };
 
-        // 先不带封面的结果立刻发出去：搜索的感知延迟只该等于一次搜索请求。
-        // 之前 8 张封面是串行查的，每张一次 HTTPS，合计 1~3 秒 —— 那才是"搜索总是很慢"的主因。
+        // 歌单 / 歌手：和曲目搜索是两个接口，但必须和曲目**一起**发出去。
+        // 之前是分四次 post（歌单一次、歌手一次、封面一次），每来一批头部就长高一截，
+        // 列表跟着重排 —— 表现就是"跳变 + 像卡住"。这里一次成型，封面再单独补。
+        auto pls = p->SearchPlaylists(key, 6);
+        QVariantList pv;
+        for (const auto& pl : pls) {
+            QVariantMap m;
+            m["id"] = ToQ(pl.id);
+            m["name"] = ToQ(pl.name);
+            m["creator"] = ToQ(pl.creator);
+            m["cover"] = ToQ(pl.cover);
+            m["count"] = pl.songCount;
+            m["playCount"] = pl.playCount;
+            pv.append(m);
+        }
+
+        {
+            auto real = p->SearchArtists(key, 8);
+            if (!real.empty()) {
+                artists.clear();
+                for (const auto& a2 : real) {
+                    QVariantMap m;
+                    m["id"] = ToQ(a2.id);
+                    m["name"] = ToQ(a2.name);
+                    m["count"] = a2.songCount;
+                    artists.append(m);
+                }
+            }
+        }
+
         QVariantList albums = buildAlbums({});
         const bool more = songs.size() >= 100;
         QMetaObject::invokeMethod(
             this,
-            [this, out, raw, artists, albums, src, more, name = tr("搜索：%1").arg(ToQ(key))]() {
+            [this, out, raw, artists, albums, pv, src, more,
+             name = tr("搜索：%1").arg(ToQ(key))]() {
                 if (src != source_ || viewMode_ != 1) return;
                 tracks_ = out;
                 raw_ = raw;
-                SyncPlayingRow();
                 artists_ = artists;
                 albums_ = albums;
+                playlists_ = pv;
                 viewMode_ = 1;
                 listName_ = name;
                 canMore_ = more;
+                SyncPlayingRow();
                 emit tracksChanged();
                 emit tracksReset();
                 SetBusy(false);
                 SetStatus(out.isEmpty() ? tr("没有结果") : QString());
             },
             Qt::QueuedConnection);
-
-        // 歌单：平台侧的"别人整理好的整列曲目"，和曲目搜索是两个接口
-        {
-            auto pls = p->SearchPlaylists(key, 6);
-            if (!pls.empty()) {
-                QVariantList pv;
-                for (const auto& pl : pls) {
-                    QVariantMap m;
-                    m["id"] = ToQ(pl.id);
-                    m["name"] = ToQ(pl.name);
-                    m["creator"] = ToQ(pl.creator);
-                    m["cover"] = ToQ(pl.cover);
-                    m["count"] = pl.songCount;
-                    m["playCount"] = pl.playCount;
-                    pv.append(m);
-                }
-                QMetaObject::invokeMethod(
-                    this,
-                    [this, pv, src]() {
-                        if (src != source_ || viewMode_ != 1) return;
-                        playlists_ = pv;
-                        emit tracksChanged();
-                    },
-                    Qt::QueuedConnection);
-            }
-        }
-
-        // 歌手实体：曲目搜索不带 singerid，单独查一次。查到就换成带 id 的版本 ——
-        // 点歌手才能进「他的全部歌曲」；查不到就保留按名字归并的那份，点的时候再反查。
-        {
-            auto real = p->SearchArtists(key, 8);
-            if (!real.empty()) {
-                QVariantList av;
-                for (const auto& a : real) {
-                    QVariantMap m;
-                    m["id"] = ToQ(a.id);
-                    m["name"] = ToQ(a.name);
-                    m["count"] = a.songCount;
-                    av.append(m);
-                }
-                QMetaObject::invokeMethod(
-                    this,
-                    [this, av, src]() {
-                        if (src != source_ || viewMode_ != 1) return;
-                        artists_ = av;
-                        emit tracksChanged();
-                    },
-                    Qt::QueuedConnection);
-            }
-        }
 
         if (n <= 0) return;
 
