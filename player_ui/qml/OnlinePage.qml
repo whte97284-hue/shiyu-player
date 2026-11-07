@@ -937,7 +937,8 @@ Item {
                     width: parent.width
                     property bool want: online.viewMode === 1 && online.artists.length > 0
                     visible: height > 0.5
-                    height: want ? 78 : 0
+                    // 12 上边距 + 8 偏移 + 42 胶囊 + 8 下边距
+                    height: want ? 70 : 0
                     Behavior on height { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
 
                     ListView {
@@ -953,33 +954,39 @@ Item {
                         delegate: Rectangle {
                             required property int index
                             required property var modelData
-                            width: chipRow.width + 24
-                            height: 46
-                            radius: 23
-                            y: 6
+                            // 宽高都从内容算：头像 + 间距 + 文字，左右留白对称
+                            width: chipRow.implicitWidth
+                            height: 42
+                            radius: 21
+                            y: 8
                             color: chipMouse.containsMouse ? page.faint : "transparent"
                             border.width: 1
                             border.color: Theme.hairline
                             Behavior on color { ColorAnimation { duration: Theme.fast } }
                             Row {
                                 id: chipRow
-                                x: 6
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 8
+                                anchors.centerIn: parent
+                                // 左 6（贴住 30px 头像）、右 13：文字和头像之间留 11，
+                                // 原来 8 太挤，而且右留白比左多，文字看着被推向圆形
+                                spacing: 11
+                                leftPadding: 6
+                                rightPadding: 13
                                 Rectangle {
-                                    width: 34; height: 34; radius: 17
+                                    width: 30; height: 30; radius: 15
                                     anchors.verticalCenter: parent.verticalCenter
                                     color: page.dim
                                     Text {
                                         anchors.centerIn: parent
                                         text: modelData.name.charAt(0)
                                         color: Theme.accent
-                                        font.pixelSize: 13
+                                        font.pixelSize: 12
                                         font.weight: Font.DemiBold
                                     }
                                 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
+                                    // 不给宽度时 elide 是空操作，长名字会把胶囊撑到看不见头
+                                    width: Math.min(implicitWidth, 156)
                                     text: modelData.name
                                     color: chipMouse.containsMouse ? Theme.accent : Theme.text
                                     font.pixelSize: 12
