@@ -363,6 +363,14 @@ std::wstring NormalizeImpl(const std::wstring& in) {
             c == L'\u3002' || c == L'\u300a' || c == L'\u300b') {
             continue;
         }
+        if (c >= 0xFF01 && c <= 0xFF5E) c = static_cast<wchar_t>(c - 0xFEE0);
+        else if (c == 0x3000) c = L' ';
+        if (c == L' ' || c == L'-' || c == L'_' || c == L'.' || c == L'\'' || c == L'"' ||
+            c == L'(' || c == L')' || c == L'!' || c == L'?' || c == L',' || c == L'~' ||
+            c == L'\u301c' || c == L'\u30fb' || c == L'\u00b7' || c == L'\u2026' ||
+            c == L'/' || c == L':' || c == L'\u2018' || c == L'\u2019' || c == L'\u201c' || c == L'\u201d') {
+            continue;
+        }
         out.push_back(static_cast<wchar_t>(std::towlower(c)));
     }
     return out;

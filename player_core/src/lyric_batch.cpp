@@ -187,28 +187,26 @@ std::wstring Norm(std::wstring s) {
     return out;
 }
 
-// 去掉歌名里的括号附注
-std::wstring Core(const std::wstring& s) {
+std::wstring StripParens(const std::wstring& s) {
     std::wstring out;
     int depth = 0;
     for (wchar_t c : s) {
-        if (c == L'(' || c == L'（' || c == L'[' || c == L'【') { ++depth; continue; }
-        if (c == L')' || c == L'）' || c == L']' || c == L'】') { if (depth) --depth; continue; }
+        if (c == L'(' || c == L'（' || c == L'[' || c == L'【' || c == L'《') { ++depth; continue; }
+        if (c == L')' || c == L'）' || c == L']' || c == L'】' || c == L'》') { if (depth) --depth; continue; }
         if (!depth) out += c;
     }
-    return Norm(out);
+    return out;
+}
+
+// 去掉歌名里的括号附注
+std::wstring Core(const std::wstring& s) {
+    return Norm(StripParens(s));
 }
 
 // 去括号但**保留原始大小写**。搜索关键词必须用它:
 // 酷狗 krcs 区分大小写,实测「Bad Apple!!」有 10 条,「bad apple!!」0 条。
 std::wstring CoreRaw(const std::wstring& s) {
-    std::wstring out;
-    int depth = 0;
-    for (wchar_t c : s) {
-        if (c == L'(' || c == L'（' || c == L'[' || c == L'【') { ++depth; continue; }
-        if (c == L')' || c == L'）' || c == L']' || c == L'】') { if (depth) --depth; continue; }
-        if (!depth) out += c;
-    }
+    std::wstring out = StripParens(s);
     // 只收掉首尾空白和连续空格,不动大小写
     std::wstring trim;
     bool sp = false;
@@ -221,49 +219,125 @@ std::wstring CoreRaw(const std::wstring& s) {
     return trim;
 }
 
-bool TitleHit(const std::wstring& qt, const std::wstring& ct, int precision = 1) {
-    if (qt.empty() || ct.empty()) return false;
-    const std::wstring a = Norm(qt), b = Norm(ct);
-    if (a == b || Core(qt) == Core(ct)) return true;
-    if (precision <= 0) return false;   // 快速档:只认精确相等,宁可漏也不误配
+// 统一复用 LyricProvider::Normalize(去空白/全角折半角/标点/中点/波浪号)做比对键
+std::wstring MatchKey(const std::wstring& s) {
+    return LyricProvider::Normalize(Clean(s));
+}
 
-    // 双语标题里日文部分常常很短:「ai no hana 愛の花」的「愛の花」只占 3/15,
-    // 「Akari 灯」只占 1/7 —— 按整体比例算永远到不了 40%,全被误杀。
-    // 所以先按空格/斜杠把查询标题拆开,任何一段和候选标题完全相等就认。
+bool IsCjkOrKana(wchar_t c) {
+    return (c >= 0x3040 && c <= 0x30FF) || // Hiragana & Katakana
+           (c >= 0x31F0 && c <= 0x31FF) || // Katakana Phonetic Extensions
+           (c >= 0x4E00 && c <= 0x9FFF) || // CJK Unified
+           (c >= 0x3400 && c <= 0x4DBF) || // CJK Ext A
+           (c >= 0xAC00 && c <= 0xD7AF);   // Hangul
+}
+
+bool HasNonAsciiWord(const std::wstring& s) {
+    int cnt = 0;
+    for (wchar_t c : s)
+        if (IsCjkOrKana(c) && ++cnt >= 2) return true;
+    return false;
+}
+
+bool IsStopSeg(const std::wstring& k) {
+    return k == L"single" || k == L"ep" || k == L"ver" || k == L"version" || k == L"remix" ||
+           k == L"live" || k == L"instrumental" || k == L"inst" || k == L"edit" || k == L"feat" ||
+           k == L"ft" || k == L"a" || k == L"the";
+}
+
+// 抽取分隔片段及脚本切换片段(如 "Be a flower 花になって" -> ["beaflower", "花になって", ...])
+std::vector<std::wstring> TitleSegments(const std::wstring& s) {
+    const std::wstring a = Norm(s);
+    std::vector<std::wstring> chunks;
+    auto pushUnique = [&](const std::wstring& raw) {
+        std::wstring k = MatchKey(raw);
+        if (!k.empty() && !IsStopSeg(k) &&
+            std::find(chunks.begin(), chunks.end(), k) == chunks.end()) {
+            chunks.push_back(std::move(k));
+        }
+    };
     {
-        std::vector<std::wstring> segs;
+        std::wstring cur;
+        int prevScript = -1; // 0=ascii/other, 1=cjk/kana/hangul
+        for (wchar_t c : a) {
+            if (c == L'/' || c == L'-' || c == L'_' || c == L'~' || c == L'\u00b7') {
+                if (!cur.empty()) { pushUnique(cur); cur.clear(); }
+                prevScript = -1;
+                continue;
+            }
+            if (c == L' ' || c == L'\t') {
+                if (!cur.empty()) cur += L' ';
+                continue;
+            }
+            const int sc = IsCjkOrKana(c) ? 1 : 0;
+            if (prevScript != -1 && sc != prevScript && !cur.empty()) {
+                pushUnique(cur);
+                cur.clear();
+            }
+            cur += c;
+            prevScript = sc;
+        }
+        if (!cur.empty()) pushUnique(cur);
+    }
+    {
         std::wstring cur;
         for (wchar_t c : a) {
             if (c == L' ' || c == L'\t' || c == L'/' || c == L'-' || c == L'_' || c == L'~' || c == L'\u00b7') {
-                if (!cur.empty()) { segs.push_back(cur); cur.clear(); }
+                if (!cur.empty()) { pushUnique(cur); cur.clear(); }
             } else {
                 cur += c;
             }
         }
-        if (!cur.empty()) segs.push_back(cur);
-        if (segs.size() > 1) {
+        if (!cur.empty()) pushUnique(cur);
+    }
+    return chunks;
+}
+
+bool TitleHit(const std::wstring& qt, const std::wstring& ct, int precision = 1) {
+    if (qt.empty() || ct.empty()) return false;
+    const std::wstring ka = MatchKey(qt), kb = MatchKey(ct);
+    const std::wstring ca = MatchKey(StripParens(qt)), cb = MatchKey(StripParens(ct));
+    if (ka.empty() || kb.empty()) return false;
+    if (ka == kb || (!ca.empty() && ca == cb)) return true;
+    if (precision <= 0) return false;   // 快速档:只认精确相等,宁可漏也不误配
+
+    // 拆段匹配:覆盖双语顺序反转、带前缀标签、括号内外重排等情况
+    {
+        const auto qSegs = TitleSegments(qt);
+        const auto qCoreSegs = TitleSegments(StripParens(qt));
+        const auto cCoreSegs = TitleSegments(StripParens(ct));
+        auto checkSegs = [&](const std::vector<std::wstring>& segs) -> bool {
+            if (segs.size() <= 1) return false;
             for (const auto& seg : segs) {
-                if (seg == b) return true;
-                // 只放宽到「候选包含该片段且占比 >=70%」——
-                // 用纯包含会误配:片段「会いに行こう」会命中
-                // 「ねこまむしの旦那に会いに行こう」(6/14 = 43%)。
-                if (seg.size() >= 2 && b.find(seg) != std::wstring::npos &&
-                    seg.size() * 10 >= b.size() * 7)
+                if (seg == kb || (!cb.empty() && seg == cb)) return true;
+                if (seg.size() >= 2 && kb.find(seg) != std::wstring::npos &&
+                    seg.size() * 10 >= kb.size() * 7)
                     return true;
+                if (seg.size() >= 2 && !cb.empty() && cb.find(seg) != std::wstring::npos &&
+                    seg.size() * 10 >= cb.size() * 7)
+                    return true;
+                for (const auto& cs : cCoreSegs) {
+                    if (seg == cs && (HasNonAsciiWord(seg) || seg.size() >= 6)) return true;
+                }
             }
-        }
+            return false;
+        };
+        if (checkSegs(qSegs) || checkSegs(qCoreSegs)) return true;
     }
 
     // 兜底:一方完整包含另一方。标准档要求短串占长串 40% 以上,精细档放宽到 30%
-    const std::wstring& lo = a.size() <= b.size() ? a : b;
-    const std::wstring& hi = a.size() <= b.size() ? b : a;
-    const int needPct = precision >= 2 ? 3 : 4;
-    if (lo.size() >= 2 && hi.find(lo) != std::wstring::npos)
-        return lo.size() * 10 >= hi.size() * needPct;
-
-    // 精细档再放宽:短串只要 >=3 个字符,被包含就认(「会いに行こう」这种)
-    if (precision >= 2 && lo.size() >= 3 && hi.find(lo) != std::wstring::npos) return true;
-    return false;
+    auto containsMatch = [precision](const std::wstring& x, const std::wstring& y) -> bool {
+        if (x.empty() || y.empty()) return false;
+        const std::wstring& lo = x.size() <= y.size() ? x : y;
+        const std::wstring& hi = x.size() <= y.size() ? y : x;
+        const int needPct = precision >= 2 ? 3 : 4;
+        if (lo.size() >= 2 && hi.find(lo) != std::wstring::npos &&
+            lo.size() * 10 >= hi.size() * needPct)
+            return true;
+        if (precision >= 2 && lo.size() >= 3 && hi.find(lo) != std::wstring::npos) return true;
+        return false;
+    };
+    return containsMatch(ka, kb) || containsMatch(ca, cb);
 }
 
 bool ArtistHit(const std::wstring& qa, const std::wstring& ca) {
@@ -466,9 +540,132 @@ int PickCand(const BatchTrack& t, const std::vector<KrcsCand>& cands) {
     return best;
 }
 
+std::wstring TrimWs(const std::wstring& s) {
+    size_t a = 0, b = s.size();
+    while (a < b && (s[a] == L' ' || s[a] == L'\t')) ++a;
+    while (b > a && (s[b - 1] == L' ' || s[b - 1] == L'\t')) --b;
+    return s.substr(a, b - a);
+}
+
+bool IsInstrumentalTitle(const std::wstring& s) {
+    const std::wstring k = Norm(s);
+    return k.find(L"instrumental") != std::wstring::npos ||
+           k.find(L"off vocal") != std::wstring::npos ||
+           k.find(L"offvocal") != std::wstring::npos ||
+           k.find(L"karaoke") != std::wstring::npos ||
+           k.find(L"伴奏") != std::wstring::npos ||
+           k.find(L"カラオケ") != std::wstring::npos;
+}
+
+bool HasAsciiWord(const std::wstring& s) {
+    int cnt = 0;
+    for (wchar_t c : s)
+        if (((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z')) && ++cnt >= 2) return true;
+    return false;
+}
+
+// 从「罗马音/英文 + 中日韩文」双语混排里抽取出非 ASCII 主干用于二次检索
+std::wstring ExtractCjkPart(const std::wstring& s) {
+    if (!HasNonAsciiWord(s) || !HasAsciiWord(s)) return s;
+    std::wstring out;
+    bool prevCjk = false;
+    for (wchar_t c : s) {
+        const bool isCjk = IsCjkOrKana(c);
+        const bool isJoiner = (c == L'・' || c == L'ー' || c == L'々' || c == L'ゝ' || c == L'ゞ' ||
+                               c == L'!' || c == L'?' || c == L'！' || c == L'？');
+        if (isCjk || (prevCjk && isJoiner)) {
+            out += c;
+            prevCjk = true;
+        } else {
+            if (prevCjk && !out.empty() && out.back() != L' ') out += L' ';
+            prevCjk = false;
+        }
+    }
+    out = TrimWs(out);
+    return HasNonAsciiWord(out) ? out : s;
+}
+
+// 构造双语/杂质清洗后的重试检索词(只在主搜索未命中时启用)
+bool BuildRetryQuery(const BatchTrack& t, LyricQuery& out) {
+    std::wstring title = TrimWs(CoreRaw(Clean(t.title)));
+    std::wstring artist = TrimWs(Clean(t.artist));
+
+    // 去掉标签常见的 "Single " 前缀和尾部混入的 " -歌手" 后缀
+    const std::wstring low = Norm(title);
+    if (low.rfind(L"single ", 0) == 0 && title.size() > 7) title = TrimWs(title.substr(7));
+    if (!artist.empty()) {
+        const std::wstring ak = MatchKey(artist);
+        const std::wstring akCjk = MatchKey(ExtractCjkPart(artist));
+        const size_t dash = title.rfind(L" -");
+        if (dash != std::wstring::npos && dash > 0) {
+            const std::wstring tail = MatchKey(title.substr(dash + 2));
+            if (!tail.empty() && (tail == ak || (!akCjk.empty() && tail == akCjk)))
+                title = TrimWs(title.substr(0, dash));
+        }
+    }
+
+    std::wstring jt = ExtractCjkPart(title);
+    // 像 "優しい...-Anime Version-(M3)" 只是标注版型,去完版本修饰后搜没意义且会多跑一倍请求
+    if (jt != title) {
+        const std::wstring lowT = Norm(title);
+        if (lowT.find(L"anime version") != std::wstring::npos || lowT.find(L"instrumental") != std::wstring::npos)
+            jt = title;
+    }
+    const std::wstring ja = ExtractCjkPart(artist);
+    if (jt == TrimWs(Clean(t.title)) && ja == TrimWs(Clean(t.artist))) return false;
+
+    out.title = jt.empty() ? title : jt;
+    out.artist = ja.empty() ? artist : ja;
+    out.album = t.album;
+    out.duration_ms = t.duration_ms;
+    return MatchKey(out.title) != MatchKey(t.title) || MatchKey(out.artist) != MatchKey(t.artist);
+}
+
+bool IsTransportError(const std::string& err) {
+    return err.find("http failed") != std::string::npos ||
+           err.find("bad json") != std::string::npos ||
+           err.find("code 405") != std::string::npos;
+}
+
 // 降级源:用 LyricProvider 自己的搜索,只认歌名对得上的
 bool TryProviderSource(LyricProvider& p, const char* source, const BatchTrack& t, RawLyricDoc& doc,
-                       LyricCandidate& picked, std::string* why = nullptr, int precision = 1) {
+                       LyricCandidate& picked, std::string* why = nullptr, int precision = 1,
+                       bool* isNetErr = nullptr) {
+    if (isNetErr) *isNetErr = false;
+    auto pickBest = [&](const std::vector<LyricCandidate>& list, int& outScore) -> int {
+        int best = -1;
+        outScore = -9999;
+        for (size_t i = 0; i < list.size(); ++i) {
+            const auto& c = list[i];
+            if (!TitleHit(t.title, c.title, precision)) continue;
+            // 纯伴奏/卡拉OK版本不贴人声歌词,避免误把主唱歌词写给 -instrumental-
+            if (IsInstrumentalTitle(t.title) && !IsInstrumentalTitle(c.title)) continue;
+            int sc = 0;
+            const std::wstring kt = MatchKey(t.title), kc = MatchKey(c.title);
+            const std::wstring ct = MatchKey(StripParens(t.title)), cc = MatchKey(StripParens(c.title));
+            if (kt == kc) sc += 120;
+            else if (!ct.empty() && ct == cc) sc += 90;
+            const bool ah = ArtistHit(t.artist, c.artist);
+            if (ah) sc += 60;
+
+            bool durBad = false;
+            bool durClose = false;
+            if (t.duration_ms && c.duration_ms) {
+                const long long dd = std::llabs((long long)c.duration_ms - (long long)t.duration_ms);
+                if (dd <= 3000) { sc += 50; durClose = true; }
+                else if (dd <= 8000) sc += 10;
+                else { sc -= (precision >= 2 ? 20 : 50); durBad = true; }
+            }
+            // 防护:歌手明确冲突时先扣分(避免「Que Sera Sera ケセラセラ」误抢翻唱,压过后再走双语主干重试)
+            if (!t.artist.empty() && !c.artist.empty() && !ah) {
+                sc -= 80;
+                if (durBad || (kt.size() <= 4 && !durClose)) sc -= 100;
+            }
+            if (sc > outScore) { outScore = sc; best = (int)i; }
+        }
+        return best;
+    };
+
     LyricQuery q;
     q.title = t.title;
     q.artist = t.artist;
@@ -476,30 +673,47 @@ bool TryProviderSource(LyricProvider& p, const char* source, const BatchTrack& t
     q.duration_ms = t.duration_ms;
     std::vector<LyricCandidate> list;
     std::string err;
-    if (!p.Search(source, q, list, &err) || list.empty()) {
-        if (why) *why = std::string(source) + ": " + (err.empty() ? "0 results" : err);
+    p.Search(source, q, list, &err);
+    if (IsTransportError(err)) {
+        if (isNetErr) *isNetErr = true;
+        if (why) *why = std::string(source) + ": " + err;
         return false;
     }
-    int best = -1, bestScore = -9999;
-    for (size_t i = 0; i < list.size(); ++i) {
-        const auto& c = list[i];
-        if (!TitleHit(t.title, c.title, precision)) continue;
-        int sc = 0;
-        if (Norm(t.title) == Norm(c.title)) sc += 120;
-        else if (Core(t.title) == Core(c.title)) sc += 90;
-        if (ArtistHit(t.artist, c.artist)) sc += 60;
-        if (t.duration_ms && c.duration_ms) {
-            const long long dd = std::llabs((long long)c.duration_ms - (long long)t.duration_ms);
-            if (dd <= 3000) sc += 50;
-            else if (dd <= 8000) sc += 10;
-            else sc -= (precision >= 2 ? 20 : 50);   // 时长对不上只降权,精细档扣得更少
+
+    int bestScore = -9999;
+    int best = list.empty() ? -1 : pickBest(list, bestScore);
+
+    // 主查询没命中或置信度不高(如没对上歌手)时,若歌名/歌手为双语混排,提取中日韩主干重试一次
+    LyricQuery q2;
+    if ((best < 0 || bestScore < 100) && precision >= 1 && BuildRetryQuery(t, q2)) {
+        std::vector<LyricCandidate> list2;
+        std::string err2;
+        p.Search(source, q2, list2, &err2);
+        if (IsTransportError(err2)) {
+            if (isNetErr) *isNetErr = true;
+            if (why) *why = std::string(source) + ": " + err2;
+            return false;
         }
-        if (sc > bestScore) { bestScore = sc; best = (int)i; }
+        if (!list2.empty()) {
+            int sc2 = -9999;
+            int b2 = pickBest(list2, sc2);
+            if (b2 >= 0 && (best < 0 || sc2 > bestScore)) {
+                list.swap(list2);
+                best = b2;
+                bestScore = sc2;
+            } else if (list.empty()) {
+                list.swap(list2);
+            }
+        }
+    }
+
+    if (list.empty()) {
+        if (why) *why = std::string(source) + ": " + (err.empty() ? "0 results" : err);
+        return false;
     }
     if (best < 0 || bestScore < 0) {
         if (why) {
             *why = std::string(source) + ": " + std::to_string(list.size()) + " results, no title match";
-            // 把候选标题带上,否则界面上只看到「需核对」,根本不知道是搜错了还是没这首歌
             for (size_t k = 0; k < list.size() && k < 3; ++k) {
                 *why += " | " + AudioTagParser::WideToUtf8(list[k].title);
                 if (!list[k].artist.empty()) *why += " / " + AudioTagParser::WideToUtf8(list[k].artist);
@@ -508,6 +722,7 @@ bool TryProviderSource(LyricProvider& p, const char* source, const BatchTrack& t
         return false;
     }
     if (!p.Fetch(list[best], doc, &err)) {
+        if (IsTransportError(err) && isNetErr) *isNetErr = true;
         if (why) *why = std::string(source) + ": fetch " + (err.empty() ? "failed" : err);
         return false;
     }
@@ -574,11 +789,11 @@ bool SaveAsLrc(const BatchTrack& t, const RawLyricDoc& doc, bool overwrite, std:
     return false;
 }
 
-void Judge(BatchOutcome& r, const BatchTrack& t, const LyricCandidate& picked) {
+void Judge(BatchOutcome& r, const BatchTrack& t, const LyricCandidate& picked, int precision = 1) {
     r.hit_title = picked.title;
     r.hit_artist = picked.artist;
     r.hit_duration_ms = picked.duration_ms;
-    const bool th = TitleHit(t.title, picked.title);
+    const bool th = TitleHit(t.title, picked.title, precision);
     const bool ah = ArtistHit(t.artist, picked.artist);
     long long dd = -1;
     if (t.duration_ms && picked.duration_ms) dd = std::llabs((long long)picked.duration_ms - (long long)t.duration_ms);
@@ -629,7 +844,7 @@ std::vector<BatchOutcome> LyricBatch::Run(const std::vector<BatchTrack>& tracks,
                 r.requests = t_requests;
                 r.source = src;
                 if (src) {
-                    Judge(r, t, picked);
+                    Judge(r, t, picked, opt.precision);
                     if (opt.write_lrc) {
                     std::string swhy;
                     r.saved = SaveAsLrc(t, doc, opt.overwrite, &r.saved_path, &swhy);
@@ -661,12 +876,15 @@ std::vector<BatchOutcome> LyricBatch::Run(const std::vector<BatchTrack>& tracks,
     for (int i = 0; i < threads; ++i) pool.emplace_back(worker);
     for (auto& th : pool) th.join();
 
-    // 阶段 2:降级源串行补,连续失败就熔断
+    // 阶段 2:降级源串行补 —— 仅按独立源的「连续网络/限流异常」熔断,
+    // 正常的「纯音乐查无此歌」绝不触发熔断,避免前排几首 OST 直接杀死整批兜底。
     if (opt.allow_fallback && !pending.empty() && !(opt.cancel && opt.cancel->load())) {
         LyricProvider fb(&FastGet);
-        int fails = 0;
+        int lrclibNetFails = 0;
+        int neteaseNetFails = 0;
+        auto lastNeteaseAt = std::chrono::steady_clock::time_point{};
         for (size_t i : pending) {
-            if (fails >= 8) break;
+            if (lrclibNetFails >= 5 && neteaseNetFails >= 3) break;
             if (opt.cancel && opt.cancel->load()) break;
             const BatchTrack& t = tracks[i];
             const auto t0 = std::chrono::steady_clock::now();
@@ -674,23 +892,55 @@ std::vector<BatchOutcome> LyricBatch::Run(const std::vector<BatchTrack>& tracks,
             RawLyricDoc doc;
             LyricCandidate picked;
             int src = 0;
-            if (TryProviderSource(fb, "lrclib", t, doc, picked)) src = 2;
-            else if (TryProviderSource(fb, "netease", t, doc, picked)) src = 3;
+            std::string fbWhy;
+
+            if (lrclibNetFails < 5) {
+                bool netErr = false;
+                if (TryProviderSource(fb, "lrclib", t, doc, picked, &fbWhy, opt.precision, &netErr)) {
+                    src = 2;
+                    lrclibNetFails = 0;
+                } else if (netErr) {
+                    ++lrclibNetFails;
+                } else {
+                    lrclibNetFails = 0;
+                }
+            }
+            if (src == 0 && neteaseNetFails < 3 && !(opt.cancel && opt.cancel->load())) {
+                // 仅当距上次网易云请求不足 220ms 时补足间隔,避免阻塞 LRCLIB 已耗时的轮次
+                if (lastNeteaseAt != std::chrono::steady_clock::time_point{}) {
+                    const auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - lastNeteaseAt);
+                    if (gap.count() < 220)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(220 - gap.count()));
+                }
+                lastNeteaseAt = std::chrono::steady_clock::now();
+                bool netErr = false;
+                if (TryProviderSource(fb, "netease", t, doc, picked, &fbWhy, opt.precision, &netErr)) {
+                    src = 3;
+                    neteaseNetFails = 0;
+                } else if (netErr) {
+                    ++neteaseNetFails;
+                    if (neteaseNetFails == 1 && !(opt.cancel && opt.cancel->load()))
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                } else {
+                    neteaseNetFails = 0;
+                }
+            }
+
             BatchOutcome& r = results[i];
             r.elapsed_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
             r.requests += t_requests;
             r.source = src;
             if (src) {
-                fails = 0;
-                Judge(r, t, picked);
+                Judge(r, t, picked, opt.precision);
                 if (opt.write_lrc) {
-                std::string swhy;
-                r.saved = SaveAsLrc(t, doc, opt.overwrite, &r.saved_path, &swhy);
-                if (!r.saved) r.note = "save: " + swhy;
-            }
+                    std::string swhy;
+                    r.saved = SaveAsLrc(t, doc, opt.overwrite, &r.saved_path, &swhy);
+                    if (!r.saved) r.note = "save: " + swhy;
+                }
                 if (!r.saved) r.saved_path.clear();
-            } else {
-                ++fails;
+            } else if (!fbWhy.empty()) {
+                if (r.note.empty()) r.note = fbWhy;
             }
             const size_t d = ++done;
             if (opt.on_progress) opt.on_progress(d, tracks.size());
