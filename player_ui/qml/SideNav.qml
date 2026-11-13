@@ -18,6 +18,7 @@ Item {
         { key: "songs", icon: "note", tip: qsTr("歌曲") },
         { key: "playlists", icon: "playlist", tip: qsTr("歌单") },
         { key: "search", icon: "search", tip: qsTr("搜索  Ctrl+K") },
+        { key: "online", icon: "wave", tip: qsTr("在线曲库") },
         { key: "tools", icon: "tools", tip: qsTr("转换") },
         { key: "folder", icon: "folder", tip: qsTr("音乐文件夹") },
         { key: "settings", icon: "settings", tip: qsTr("设置") }

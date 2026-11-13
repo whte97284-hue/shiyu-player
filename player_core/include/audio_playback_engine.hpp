@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "fft_visualizer.hpp"
 #include "equalizer.hpp"
+#include "stream_source.hpp"
 
 enum class PlaybackState {
     Stopped,
@@ -23,6 +24,8 @@ enum class PlaybackState {
 //   · 设备为 16 位时自动加 TPDF 抖动,24bit 母带降位深不产生截断失真
 //   · 播放位置取自解码器真实帧游标,无浮点累加漂移
 //   · 支持 CUE 分轨片段播放 (起止时间精确到帧)
+//   · 支持流式播放 (在线边下边播):解码器走自定义回调从 StreamSource 取数据,
+//     数据没到时等待而不是判 EOF;时长未知时按 0 上报,进度由已播帧数推算
 //   · 音量平滑斜坡,调音量无「拉链噪声」
 //   · 播放结束回调在独立通知线程中触发,回调里直接切歌也不会与音频线程死锁
 // ============================================================================
@@ -64,6 +67,12 @@ public:
     // 打开文件中的一个片段 (CUE 分轨),endSeconds <= 0 表示播放到文件结尾
     bool OpenFile(const std::wstring& filePath, double startSeconds, double endSeconds);
 
+    // 用流式数据源打开 (在线播放,边下边播)。src 为空返回 false。
+    // 与 OpenFile 互斥:调用它会替换当前打开的媒体 (含预加载的下一首)。
+    // 流式模式下时长可能未知,此时 GetDurationSeconds() 返回 0,UI 应按"直播式进度"显示;
+    // SeekTo 只能跳到已经下载到的位置,越界返回 false。
+    bool OpenStream(std::shared_ptr<stream_core::StreamSource> src);
+
     // 播放控制
     bool Play();
     void Pause();
@@ -99,9 +108,18 @@ public:
     // 回调钩子 (on_playback_ended 在独立通知线程中调用)
     std::function<void(PlaybackState)> on_state_changed;
     std::function<void()> on_playback_ended;
+    // 输出设备被系统收走（休眠唤醒 / 拔耳机 / 驱动重置 / 端点失效）。
+    // 在音频线程上回调，上层必须自己排队到 UI 线程再动设备。
+    std::function<void()> on_device_lost;
+
+    // 只重建输出设备，保留当前解码器（含流式缓冲）与播放位置。
+    // 设备失效后调用它就能原地接上，不需要重新解析直链。
+    bool RestartDevice();
 
     // 内部数据回调 (由 miniaudio 设备驱动调用)
     void OnAudioFrames(void* pOutput, uint32_t frameCount);
+    // 内部设备通知 (由 miniaudio 设备驱动调用)
+    void HandleDeviceNotification(int type);
 
 private:
     struct Impl;

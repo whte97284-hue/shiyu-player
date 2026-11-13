@@ -16,6 +16,10 @@ class SettingsService : public QObject {
     Q_PROPERTY(bool fade READ fade WRITE setFade NOTIFY changed)            // 暂停 / 继续时淡出淡入
     Q_PROPERTY(int fadeLevel READ fadeLevel WRITE setFadeLevel NOTIFY changed) // 0 关 / 1 短 / 2 标准 / 3 长
     Q_PROPERTY(bool onlineLyrics READ onlineLyrics WRITE setOnlineLyrics NOTIFY changed) // 本地没有歌词时联网查找
+    // ---- 联网 ----
+    // 全局断网开关：打开后所有外部请求（在线曲库 / 在线歌词 / 联网补封面 / 批量查歌词）
+    // 一律不再发出。内核里没有网络代码，网关就在这几个入口上。
+    Q_PROPERTY(bool offline READ offline WRITE setOffline NOTIFY changed)
     Q_PROPERTY(bool lyricsTranslate READ lyricsTranslate WRITE setLyricsTranslate NOTIFY changed) // 外语歌本地歌词没翻译时在线找带翻译的版本
     Q_PROPERTY(bool keepAwake READ keepAwake WRITE setKeepAwake NOTIFY changed) // 播放时不让电脑自动睡眠
     Q_PROPERTY(bool resume READ resume WRITE setResume NOTIFY changed)      // 启动时恢复上次的队列与位置
@@ -69,6 +73,10 @@ public:
     static int FadeInMs();
     bool onlineLyrics() const { return get("player/onlineLyrics", true).toBool(); }
     void setOnlineLyrics(bool v) { put("player/onlineLyrics", v); }
+    bool offline() const { return get("network/offline", false).toBool(); }
+    void setOffline(bool v) { put("network/offline", v); }
+    // 给 C++ 侧（歌词 / 封面 / 在线曲库）用的无实例判断
+    static bool Offline() { return QSettings().value("network/offline", false).toBool(); }
     bool lyricsTranslate() const { return get("player/lyricsTranslate", true).toBool(); }
     void setLyricsTranslate(bool v) { put("player/lyricsTranslate", v); }
     bool keepAwake() const { return get("power/keepAwake", true).toBool(); }

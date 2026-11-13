@@ -183,6 +183,9 @@ public:
     Q_INVOKABLE int artistOfTrack(double trackId) const;
     // 曲目详情 (右键「歌曲信息」):标签、文件路径、格式、采样率、码率、大小等;找不到返回空表
     Q_INVOKABLE QVariantMap trackInfo(double trackId) const;
+    // 按文件路径查曲目 id。在线下载入库后用它拿到 id 再走正常播放链路，
+    // 这样队列/歌词/封面/正在播放全部复用，不用另开一条播放通道。
+    Q_INVOKABLE double trackIdByPath(const QString& path) const;
     // 在资源管理器中打开曲目所在文件夹并选中该文件 (非 Windows 只打开文件夹)
     Q_INVOKABLE bool revealTrack(double trackId) const;
     Q_INVOKABLE void copyToClipboard(const QString& text) const;

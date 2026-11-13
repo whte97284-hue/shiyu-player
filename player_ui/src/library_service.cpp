@@ -1004,6 +1004,13 @@ int LibraryService::albumOfTrack(double trackId) const {
     return it == s->trackAlbum.end() ? -1 : it->second;
 }
 
+double LibraryService::trackIdByPath(const QString& path) const {
+    if (path.isEmpty()) return 0;
+    auto s = snapshot();
+    const TrackItem* t = s->catalog.FindByPath(path.toStdWString());
+    return t ? static_cast<double>(t->id) : 0.0;
+}
+
 QVariantMap LibraryService::trackInfo(double trackId) const {
     QVariantMap m;
     auto s = snapshot();

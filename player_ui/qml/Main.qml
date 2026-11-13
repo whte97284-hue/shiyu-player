@@ -297,6 +297,7 @@ Window {
                 allowEmpty: true
                 sourceComponent: SearchPage { bottomInset: pages.inset; onBack: root.back() }
             }
+            PageLoader { id: onlineLoader; key: "online"; sourceComponent: OnlinePage { bottomInset: pages.inset } }
             PageLoader { id: settingsLoader; key: "settings"; allowEmpty: true; sourceComponent: SettingsPage { bottomInset: pages.inset } }
             PageLoader { id: toolsLoader; key: "tools"; allowEmpty: true; sourceComponent: ToolsPage { bottomInset: pages.inset } }
             PageLoader { id: organizeLoader; key: "organize"; sourceComponent: OrganizePage { bottomInset: pages.inset; onBack: root.back() } }

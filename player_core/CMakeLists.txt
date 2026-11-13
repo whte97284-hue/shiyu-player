@@ -33,6 +33,8 @@ add_library(player_core STATIC
     src/cover_fetcher.cpp
     src/cover_writer.cpp
     src/cover_ogg.cpp
+    src/online_music.cpp
+    src/http_stream_source.cpp
 )
 target_include_directories(player_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_features(player_core PUBLIC cxx_std_17)
