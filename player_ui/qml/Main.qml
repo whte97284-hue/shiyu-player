@@ -911,8 +911,13 @@ Window {
         sequence: "Ctrl+L"
         enabled: player.hasTrack
         onActivated: {
-            playlists.toggleFavorite(player.trackId)
-            Nav.toast("heart", playlists.isFavorite(player.trackId) ? qsTr("已收藏") : qsTr("已取消收藏"))
+            if (player.streaming) {
+                playlists.toggleFavoriteOnline(player.streamMeta)
+                Nav.toast("heart", playlists.isFavoriteOnline(player.streamKey) ? qsTr("已收藏") : qsTr("已取消收藏"))
+            } else {
+                playlists.toggleFavorite(player.trackId)
+                Nav.toast("heart", playlists.isFavorite(player.trackId) ? qsTr("已收藏") : qsTr("已取消收藏"))
+            }
         }
     }
     Shortcut { sequence: "Ctrl+M"; onActivated: root.toggleMute() }

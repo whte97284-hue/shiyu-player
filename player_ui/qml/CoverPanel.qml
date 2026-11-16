@@ -8,7 +8,7 @@ import PlayerUi
 // 所以一张专辑常常只有一两首带图 —— 专辑墙看着有封面,其余曲目拷到别的播放器就没图了。
 // 这里一次把整张专辑的每一首都补齐。
 //
-// 无字化:只用明暗 / 边框 / 勾号表达状态,面板里不出现任何文字。
+// 界面:网格只用明暗 / 边框 / 勾号 / 小点表达状态，悬停格子显示专辑名与缺曲数，头部与底部显示进度与结果摘要。
 Item {
     id: root
     property bool shown: false
@@ -30,11 +30,22 @@ Item {
         return n
     }
 
+    function sameAlbums(a, b) {
+        if (a === b) return true
+        if (!a || !b || a.length !== b.length) return false
+        for (let i = 0; i < a.length; ++i) {
+            const x = a[i], y = b[i]
+            if (x.index !== y.index || x.missing !== y.missing ||
+                x.fixable !== y.fixable || x.cover !== y.cover ||
+                x.title !== y.title) return false
+        }
+        return true
+    }
     function reload() {
         const next = covers.albumStates()
         // 内容没变就别换引用:albums 一换,GridView 会把整个 delegate 池重建,
         // 每个新格子都从 opacity 0 重播入场动画 —— 频繁调用时会一直看不到格子。
-        if (JSON.stringify(next) === JSON.stringify(albums)) return
+        if (sameAlbums(next, albums)) return
         albums = next
     }
     function openAt(item) {
@@ -97,9 +108,9 @@ Item {
         readonly property int gap: 10
         width: Math.min(520, root.width - 40)
         readonly property real cell: (width - pad * 2 - gap * (cols - 1)) / cols
-        readonly property int rows: Math.max(1, Math.ceil(root.albums.length / cols))
+        readonly property int rows: root.albums.length > 0 ? Math.ceil(root.albums.length / cols) : 0
         // 高度跟着行数走:专辑少时不留大片空白,多了才滚动
-        readonly property real contentH: headH + rows * cell + (rows - 1) * gap + footH + 8
+        readonly property real contentH: headH + (rows > 0 ? rows * cell + (rows - 1) * gap : 56) + footH + 8
         // 安全区:顶部留 20,底部让开播放栏 —— 保证底部按钮始终可点
         readonly property int safeTop: 20
         readonly property real safeBottom: Math.max(safeTop + 240, root.height - root.bottomInset - 8)
@@ -251,14 +262,26 @@ Item {
                 onClicked: root.close()
             }
 
+            // ---- 空状态提示 ----
+            Text {
+                visible: root.albums.length === 0
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: pop.headH + 18
+                text: "没有缺封面的专辑"
+                color: Theme.text
+                font.family: Theme.fontFamily
+                font.pixelSize: 13
+                opacity: 0.45
+            }
+
             // ---- 专辑网格 ----
             GridView {
                 id: grid
                 x: pop.pad
                 y: pop.headH
                 width: card.width - pop.pad * 2
-                height: Math.min(card.height - pop.headH - pop.footH,
-                                 pop.rows * pop.cell + (pop.rows - 1) * pop.gap)
+                height: Math.max(0, Math.min(card.height - pop.headH - pop.footH,
+                                 pop.rows * pop.cell + Math.max(0, pop.rows - 1) * pop.gap))
                 clip: true
                 cellWidth: pop.cell
                 cellHeight: pop.cell
@@ -316,7 +339,7 @@ Item {
                         anchors.bottomMargin: 9
                         spacing: 3
                         Repeater {
-                            model: cellItem.dead ? 0 : (cellItem.missing >= 2 ? 2 : 1)
+                            model: cellItem.dead ? 0 : (cellItem.missing >= modelData.total ? 1 : 2)
                             Rectangle { width: 5; height: 5; radius: 2.5; color: Theme.accent }
                         }
                         // 补不了的:一根灰横杠
@@ -347,6 +370,22 @@ Item {
                     }
 
                     HoverHandler { id: hover; enabled: !root.busy && !cellItem.dead }
+                    HoverHandler {
+                        id: tipHover
+                        enabled: root.shown
+                        onHoveredChanged: {
+                            if (hovered && modelData) {
+                                const suffix = cellItem.dead
+                                    ? "（格式不支持写入）"
+                                    : (" · 缺 " + cellItem.missing + "/" + modelData.total + " 首")
+                                Nav.hint(cellItem, modelData.title + suffix)
+                            } else {
+                                Nav.unhint(cellItem)
+                            }
+                        }
+                    }
+                    onVisibleChanged: if (!visible) Nav.unhint(cellItem)
+                    Component.onDestruction: Nav.unhint(cellItem)
                     // 悬停轻微放大,给一点"能点"的反馈
                     scale: (hover.hovered && !cellItem.on) ? 1.035 : 1
                     Behavior on scale { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }

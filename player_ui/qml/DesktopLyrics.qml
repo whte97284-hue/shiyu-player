@@ -27,7 +27,8 @@ Window {
     readonly property color sungColor: presets[Math.max(0, Math.min(presets.length - 1, settings.lyricsColor))].c
 
     flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
-           | (locked && !overUnlock ? Qt.WindowTransparentForInput : 0)
+    readonly property bool clickThrough: locked && !overUnlock
+    onClickThroughChanged: if (visible) windowHelper.setClickThrough(dl, clickThrough)
     color: "transparent"
     // 不挂在主窗口下:主窗口最小化时桌面歌词照常显示
     transientParent: null
@@ -39,21 +40,37 @@ Window {
             + Math.round(fs * 0.12) * (settings.lyricsTwoLine ? 1 : 0) + 28
     readonly property int toolbarH: 44
 
+    property bool placing: true
+    property bool readyToSave: false
+    Timer { id: armSave; interval: 250; onTriggered: dl.readyToSave = true }
+
     function placeDefault() {
+        placing = true
+        readyToSave = false
         const p = settings.lyricsPos
         // 记住的位置还在某块屏幕上就用它 (换了显示器则回到默认)
+        let tx = Screen.virtualX + Math.round((Screen.width - width) / 2)
+        let ty = Screen.virtualY + Screen.height - height - 120
         const scr = Qt.application.screens
         for (let i = 0; i < scr.length; ++i) {
             const s = scr[i]
-            if (p.x >= s.virtualX && p.x < s.virtualX + s.width - 60 && p.y >= s.virtualY && p.y < s.virtualY + s.height - 40) {
-                x = p.x; y = p.y
-                return
+            if (p.x + 80 > s.virtualX && p.x < s.virtualX + s.width - 80 && p.y + 30 > s.virtualY && p.y < s.virtualY + s.height - 30) {
+                tx = p.x; ty = p.y
+                break
             }
         }
-        x = Screen.virtualX + (Screen.width - width) / 2
-        y = Screen.virtualY + Screen.height - height - 120
+        x = tx; y = ty
+        Qt.callLater(() => {
+            if (!dl.visible) return
+            if (Math.abs(dl.x - tx) > 1 || Math.abs(dl.y - ty) > 1) {
+                dl.x = tx; dl.y = ty
+            }
+            windowHelper.setClickThrough(dl, dl.clickThrough)
+            dl.placing = false
+            armSave.restart()
+        })
     }
-    onVisibleChanged: if (visible) placeDefault()
+    onVisibleChanged: if (visible) placeDefault(); else { readyToSave = false; armSave.stop(); savePos.stop() }
     Component.onCompleted: placeDefault()
 
     // ---------- 歌词数据 ----------
@@ -128,9 +145,9 @@ Window {
     // 注意这里**不能**用 dl.dragging 当条件:startSystemMove() 之后鼠标被系统接管,
     // MouseArea 的 onReleased 会立刻触发把 dragging 清成 false,
     // 等 400ms 后 Timer 真正执行时条件已经不成立 —— 位置永远存不下来。
-    onXChanged: savePos.restart()
-    onYChanged: savePos.restart()
-    Timer { id: savePos; interval: 400; onTriggered: { if (dl.visible) settings.lyricsPos = Qt.point(Math.round(dl.x), Math.round(dl.y)) } }
+    onXChanged: if (!placing && readyToSave) savePos.restart()
+    onYChanged: if (!placing && readyToSave) savePos.restart()
+    Timer { id: savePos; interval: 400; onTriggered: { if (dl.visible && !dl.placing && dl.readyToSave) settings.lyricsPos = Qt.point(Math.round(dl.x), Math.round(dl.y)) } }
 
     // ---------- 工具条 ----------
     component Tool: Rectangle {

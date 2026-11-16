@@ -22,11 +22,13 @@ Item {
     property bool showQuality: true     // 整张专辑音质相同时由专辑页关掉,不逐行重复
     property bool keyFocus: false       // 键盘选中 (上下键)
     property string highlight           // 搜索词高亮
+    property bool isOnline: false
+    property string onlineKey: ""
     property var menuContext: ({})
-    readonly property bool current: player.hasTrack && player.trackId === trackId
+    readonly property bool current: player.hasTrack && (isOnline ? (player.streaming && player.streamKey === onlineKey) : (trackId >= 0 && player.trackId === trackId))
     signal activated()
     // 右键菜单的「播放」与双击同一做法 (在歌单 / 歌手 / 搜索里播放时保留所在列表作为队列)
-    function menuCtx() { return Object.assign({ play: () => row.activated() }, row.menuContext) }
+    function menuCtx() { return Object.assign({ play: () => row.activated(), isOnline: row.isOnline, onlineKey: row.onlineKey, onlineMeta: row.isOnline ? playlists.onlineMeta(row.onlineKey) : ({}) }, row.menuContext) }
     height: cover.length ? 60 : 54
 
     readonly property bool hovered: mouse.containsMouse || heart.hovered || more.hovered || albumLink.containsMouse || artistArea.containsMouse
@@ -39,7 +41,7 @@ Item {
         artistIdx = library.artistIndexOf(artist)
         artistGen = library.generation
     }
-    readonly property bool fav: playlists.revision >= 0 && playlists.isFavorite(trackId)
+    readonly property bool fav: playlists.revision >= 0 && (isOnline ? playlists.isFavoriteOnline(onlineKey) : playlists.isFavorite(trackId))
     readonly property bool wide: width > 760
 
     // 当前曲目底色 + 悬停底色 (透明度动画在渲染线程执行,快速划过整列也不掉帧);当前行悬停时也略微提亮
@@ -152,19 +154,20 @@ Item {
             restOpacity: row.fav ? 0.95 : 0.6
             opacity: row.fav || row.hovered ? 1 : 0
             Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
-            onClicked: playlists.toggleFavorite(row.trackId)
+            onClicked: row.isOnline ? playlists.toggleFavoriteOnline(playlists.onlineMeta(row.onlineKey)) : playlists.toggleFavorite(row.trackId)
         }
         // 品质标签放进定宽槽位,专辑列因此上下对齐
         Item {
             anchors.verticalCenter: parent.verticalCenter
-            visible: row.wide && row.showQuality
+            visible: row.wide && (row.showQuality || row.isOnline)
             width: 64
             height: 20
             QualityBadge {
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: row.quality
-                opacity: row.hovered || row.current ? 1 : 0.55
+                text: row.isOnline ? qsTr("在线") : row.quality
+                online: row.isOnline
+                opacity: row.hovered || row.current ? 1 : 0.65
             }
         }
         Text {
@@ -205,15 +208,29 @@ Item {
             anchors.rightMargin: albumText.visible ? 20 : 0
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
-            Text {
+            Row {
                 width: parent.width
-                text: row.highlight.length ? Nav.highlight(row.title, row.highlight, Theme.accent) : row.title
-                textFormat: row.highlight.length ? Text.StyledText : Text.PlainText
-                elide: Text.ElideRight
-                color: row.current ? Theme.accent : Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 14
-                font.weight: row.current ? Font.DemiBold : Font.Normal
+                spacing: 6
+                Text {
+                    id: titleTxt
+                    width: Math.min(implicitWidth, parent.width - (inlineOnlineBadge.visible ? inlineOnlineBadge.width + 6 : 0))
+                    text: row.highlight.length ? Nav.highlight(row.title, row.highlight, Theme.accent) : row.title
+                    textFormat: row.highlight.length ? Text.StyledText : Text.PlainText
+                    elide: Text.ElideRight
+                    color: row.current ? Theme.accent : Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 14
+                    font.weight: row.current ? Font.DemiBold : Font.Normal
+                }
+                QualityBadge {
+                    id: inlineOnlineBadge
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: row.isOnline && !row.wide
+                    text: qsTr("在线")
+                    online: true
+                    fontSize: 9
+                    opacity: row.hovered || row.current ? 1 : 0.72
+                }
             }
             Text {
                 id: artistText

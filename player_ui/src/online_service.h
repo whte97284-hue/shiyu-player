@@ -36,8 +36,9 @@ class OnlineService : public QObject {
     Q_PROPERTY(QVariantList lists READ lists NOTIFY listsChanged)
     Q_PROPERTY(QVariantList tracks READ tracks NOTIFY tracksChanged)
     // 搜索结果按实体拆开：歌手 / 专辑 / 歌曲三段，跟本地搜索页一致
-    Q_PROPERTY(QVariantList artists READ artists NOTIFY tracksChanged)
-    Q_PROPERTY(QVariantList albums READ albums NOTIFY tracksChanged)
+    Q_PROPERTY(QVariantList artists READ artists NOTIFY artistsChanged)
+    Q_PROPERTY(QVariantList albums READ albums NOTIFY albumsChanged)
+    Q_PROPERTY(QString bestCover READ bestCover NOTIFY bestCoverChanged)
     Q_PROPERTY(bool isSearch READ isSearch NOTIFY viewChanged)
     // 0 榜单 / 1 搜索 / 2 歌手 / 3 专辑。歌手和专辑页共用一套详情头部
     Q_PROPERTY(int viewMode READ viewMode NOTIFY viewChanged)
@@ -54,7 +55,7 @@ class OnlineService : public QObject {
     Q_PROPERTY(QString filterText READ filterText NOTIFY viewChanged)
     Q_PROPERTY(int baseCount READ baseCount NOTIFY viewChanged)
     // 搜索结果里的歌单（别人整理的整列曲目）
-    Q_PROPERTY(QVariantList playlists READ playlists NOTIFY tracksChanged)
+    Q_PROPERTY(QVariantList playlists READ playlists NOTIFY playlistsChanged)
     Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
     Q_PROPERTY(QString status READ status NOTIFY statusChanged)
     Q_PROPERTY(int source READ source WRITE setSource NOTIFY sourceChanged)
@@ -83,6 +84,7 @@ public:
     QVariantList tracks() const { return tracks_; }
     QVariantList artists() const { return artists_; }
     QVariantList albums() const { return albums_; }
+    QString bestCover() const { return bestCover_; }
     bool isSearch() const { return viewMode_ == 1; }
     int viewMode() const { return viewMode_; }
     bool isDetail() const { return viewMode_ >= 2; }
@@ -134,6 +136,8 @@ public:
     Q_INVOKABLE void back();                   // 从歌手/专辑页返回上一屏
     Q_INVOKABLE void loadMore();               // 搜索结果 / 歌手页加载更多
     Q_INVOKABLE void play(int row);            // 下载并播放
+    Q_INVOKABLE void playSaved(const QVariantMap& meta); // 从历史 / 歌单重播未下载的在线曲目
+    Q_INVOKABLE QVariantMap trackMeta(int row) const;
     Q_INVOKABLE void download(int row);        // 只下载
     Q_INVOKABLE void beginLogin();             // 生成二维码
     Q_INVOKABLE void cancelLogin();
@@ -146,6 +150,10 @@ public:
 signals:
     void listsChanged();
     void tracksChanged();
+    void artistsChanged();
+    void albumsChanged();
+    void playlistsChanged();
+    void bestCoverChanged();
     // 歌曲列表真的换了一批（不是只改了标题）：界面据此做一次整体淡入
     void tracksReset();
     void viewChanged();
@@ -207,6 +215,7 @@ private:
     QVariantList artists_;
     QVariantList albums_;
     QVariantList playlists_;
+    QString bestCover_;
     int viewMode_ = 0;   // 0 榜单 / 1 搜索 / 2 歌手 / 3 专辑
     // 详情页头部
     QString detailTitle_, detailSubtitle_, detailCover_, detailMeta_;
@@ -215,7 +224,8 @@ private:
     // 进详情页之前的界面快照：返回时直接还原，不再发一次请求
     struct Snapshot {
         int mode = 0;
-        QVariantList tracks, artists, albums;
+        QVariantList tracks, artists, albums, playlists;
+        QString bestCover;
         std::vector<online_core::Track> raw;
         QString listName, keyword;
         int listRow = -1;
@@ -229,6 +239,7 @@ private:
     std::deque<int> downloadQueue_;
     int listRow_ = -1;   // 当前打开的榜单下标：搜索完返回浏览态要原样拉回来
     std::vector<online_core::Track> raw_;
+    void PlayTrack(const online_core::Track& t, int src, int row);
 
     bool busy_ = false;
     int source_ = 0;

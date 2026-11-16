@@ -297,13 +297,24 @@ Item {
                 artist: model.artist
                 album: model.album
                 albumIndex: model.albumIndex
+                isOnline: !!model.isOnline
+                onlineKey: model.onlineKey || ""
                 quality: model.quality
                 duration: model.duration
                 cover: model.cover
                 showAlbum: true
                 keyFocus: rowWrap.ListView.isCurrentItem && list.dragFrom < 0
                 menuContext: ({ playlistId: page.playlistId })
-                onActivated: Nav.picked(player.pickTracks(playlistTracks.trackIds(), index, page.queueTag, false, Nav.pickNow))
+                onActivated: {
+                    if (model.isOnline) {
+                        if (trackRow.current) player.toggle()
+                        else online.playSaved(playlists.onlineMeta(model.onlineKey))
+                    } else {
+                        const ids = playlistTracks.trackIds()
+                        const pos = ids.indexOf(model.trackId)
+                        Nav.picked(player.pickTracks(ids, pos >= 0 ? pos : 0, page.queueTag, false, Nav.pickNow))
+                    }
+                }
             }
             Icon {
                 x: -26

@@ -12,6 +12,7 @@ public:
     using QObject::QObject;
     ~WindowHelper() override;
     Q_INVOKABLE void applyNativeFrame(QWindow* window);
+    Q_INVOKABLE void setClickThrough(QWindow* window, bool on);
     Q_INVOKABLE bool isWindows() const;
     // 鼠标在屏幕上的位置 (桌面歌词锁定后窗口不接收鼠标,靠它判断悬停)
     Q_INVOKABLE QPoint cursorPos() const;

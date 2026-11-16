@@ -1052,6 +1052,26 @@ bool PlayerController::playStream(const QString& url, const QString& title,
     return true;
 }
 
+QString PlayerController::streamKey() const {
+    if (!streaming_ || streamInfo_.id.trimmed().isEmpty()) return {};
+    return QStringLiteral("online:%1:%2").arg(streamInfo_.source).arg(streamInfo_.id.trimmed());
+}
+
+QVariantMap PlayerController::streamMeta() const {
+    if (!streaming_ || streamInfo_.id.trimmed().isEmpty()) return {};
+    QVariantMap m;
+    m["onlineKey"] = streamKey();
+    m["source"] = streamInfo_.source;
+    m["id"] = streamInfo_.id;
+    m["albumId"] = streamInfo_.albumId;
+    m["title"] = streamInfo_.title;
+    m["artist"] = streamInfo_.artist;
+    m["album"] = streamInfo_.album;
+    m["durationMs"] = streamInfo_.durationMs;
+    m["cover"] = streamInfo_.cover;
+    return m;
+}
+
 bool PlayerController::openIndex(int index, bool autoPlay) {
     if (!snap_ || index < 0 || index >= static_cast<int>(queue_.size())) return false;
     ensureEngine();
@@ -1432,7 +1452,9 @@ QVariant QueueModel::data(const QModelIndex& index, int role) const {
         case QueueIndexRole: return index.row();
         case CoverRole: {
             auto it = snap_->trackAlbum.find(t.id);
-            return it == snap_->trackAlbum.end() ? QString() : QString("image://cover/a/%1/%2").arg(gen_).arg(it->second);
+            return it == snap_->trackAlbum.end()
+                ? QString("image://cover/t/%1/%2").arg(gen_).arg(t.id)
+                : QString("image://cover/a/%1/%2").arg(gen_).arg(it->second);
         }
     }
     return {};

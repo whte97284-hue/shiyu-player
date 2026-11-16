@@ -68,6 +68,8 @@ class PlayerController : public QObject {
     Q_PROPERTY(bool playing READ playing NOTIFY playingChanged)
     // 当前是不是在线流式播放（曲目不在曲库里）。界面据此区分两条通道
     Q_PROPERTY(bool streaming READ isStreaming NOTIFY trackChanged)
+    Q_PROPERTY(QString streamKey READ streamKey NOTIFY trackChanged)
+    Q_PROPERTY(QVariantMap streamMeta READ streamMeta NOTIFY trackChanged)
     Q_PROPERTY(double position READ position NOTIFY positionChanged)
     Q_PROPERTY(double duration READ duration NOTIFY trackChanged)
     Q_PROPERTY(double volume READ volume WRITE setVolume NOTIFY volumeChanged)
@@ -136,6 +138,8 @@ public:
 
     bool hasTrack() const { return current_ != nullptr || streaming_; }
     bool isStreaming() const { return streaming_; }
+    QString streamKey() const;
+    QVariantMap streamMeta() const;
     double trackId() const { return current_ ? static_cast<double>(current_->id) : -1; }
     int albumIndex() const;
     QString title() const;

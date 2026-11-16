@@ -6,6 +6,7 @@ WheelHandler {
     id: h
     property Flickable flickable: parent
     property bool horizontal: false
+    property bool horizontalWheelOnly: false
     property real step: 120          // 每格滚动像素
     property int duration: 340
     signal scrolled()
@@ -26,9 +27,14 @@ WheelHandler {
 
     onWheel: (e) => {
         if (!flickable) return
+        if (horizontal && horizontalWheelOnly) {
+            const hasHoriz = e.angleDelta.x !== 0 || e.pixelDelta.x !== 0 || (e.modifiers & Qt.ShiftModifier)
+            if (!hasHoriz) { e.accepted = false; return }
+        }
         h.scrolled()
-        const pixel = horizontal ? (e.pixelDelta.x || e.pixelDelta.y) : e.pixelDelta.y
-        const angle = horizontal ? (e.angleDelta.x || e.angleDelta.y) : e.angleDelta.y
+        const useShift = horizontal && (e.modifiers & Qt.ShiftModifier)
+        const pixel = horizontal ? (e.pixelDelta.x || ((useShift || !horizontalWheelOnly) ? e.pixelDelta.y : 0)) : e.pixelDelta.y
+        const angle = horizontal ? (e.angleDelta.x || ((useShift || !horizontalWheelOnly) ? e.angleDelta.y : 0)) : e.angleDelta.y
         if (pixel !== 0 && e.device.type === PointerDevice.TouchPad) {
             anim.stop()
             apply(clamp(current() - pixel))

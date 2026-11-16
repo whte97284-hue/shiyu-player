@@ -106,7 +106,7 @@ private:
         std::wstring searchArtist;
         std::wstring altTitle;    // 文件名后段(标签是罗马字时,原文往往只在这里)
         std::vector<std::wstring> targets; // 需要写入封面的文件
-        std::wstring borrowFrom;           // 同作品的另一版本(文件里已有封面),优先向它借
+        std::vector<std::wstring> borrowCandidates; // 同作品的另一版本(文件里已有封面),优先向它借
         std::string skipReason;            // 非空 = 不用联网,直接算失败
     };
 

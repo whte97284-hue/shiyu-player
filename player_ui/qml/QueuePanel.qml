@@ -324,6 +324,7 @@ Item {
                     radius: 7
                     source: model.cover
                     decodeSize: 88
+                    fadeIn: false
                     opacity: row.played ? 0.55 : 1
                 }
                 Loader {

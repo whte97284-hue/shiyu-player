@@ -318,7 +318,7 @@ Item {
                     onClicked: np.openMenu(npMore, npMore.width / 2, npMore.height)
                 }
                 IconButton {
-                    readonly property bool fav: playlists.revision >= 0 && player.hasTrack && playlists.isFavorite(player.trackId)
+                    readonly property bool fav: playlists.revision >= 0 && player.hasTrack && (player.streaming ? playlists.isFavoriteOnline(player.streamKey) : playlists.isFavorite(player.trackId))
                     anchors.right: parent.right
                     anchors.rightMargin: -8
                     anchors.verticalCenter: titleText.verticalCenter
@@ -327,7 +327,7 @@ Item {
                     iconTint: fav ? Theme.accent : "transparent"
                     iconSize: 18
                     tip: (fav ? qsTr("取消收藏") : qsTr("收藏")) + "  Ctrl+L"
-                    onClicked: { playlists.toggleFavorite(player.trackId); popNow() }
+                    onClicked: { if (player.streaming) playlists.toggleFavoriteOnline(player.streamMeta); else playlists.toggleFavorite(player.trackId); popNow() }
                 }
             }
             // 歌手 · 专辑:各自可点,收起播放页并打开歌手 / 专辑
@@ -807,6 +807,7 @@ Item {
                     radius: 6
                     source: model.cover
                     decodeSize: 76
+                    fadeIn: false
                     opacity: played && !current ? 0.5 : 1
                 }
                 Loader {

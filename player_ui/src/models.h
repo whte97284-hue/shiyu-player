@@ -7,7 +7,7 @@
 #include "library_service.h"
 
 // 专辑墙
-class PlaylistService;
+#include "playlist_service.h"
 
 // 专辑墙:可排序 / 按音质筛选;行号经 order_ 映射到快照里的专辑下标
 class AlbumModel : public QAbstractListModel {
@@ -168,7 +168,7 @@ class TrackCollectionModel : public QAbstractListModel {
 public:
     enum Roles {
         TrackIdRole = Qt::UserRole + 1, TitleRole, ArtistRole, AlbumRole, AlbumIndexRole,
-        DurationRole, QualityRole, CoverRole, LetterRole, NumberRole
+        DurationRole, QualityRole, CoverRole, LetterRole, NumberRole, OnlineKeyRole, IsOnlineRole
     };
     TrackCollectionModel(LibraryService* lib, PlaylistService* playlists, QObject* parent = nullptr);
     int rowCount(const QModelIndex& parent = {}) const override;
@@ -181,7 +181,7 @@ public:
     void setArtistIndex(int i);
     QString playlistId() const { return playlist_; }
     void setPlaylistId(const QString& id);
-    int count() const { return static_cast<int>(rows_.size()); }
+    int count() const { return static_cast<int>(entries_.empty() ? rows_.size() : entries_.size()); }
     QStringList letters() const { return letters_; }
     int sortMode() const { return sortMode_; }
     void setSortMode(int m);
@@ -206,6 +206,7 @@ private:
     int artist_ = -1;
     QString playlist_;
     std::vector<const TrackItem*> rows_;
+    std::vector<PlaylistService::Entry> entries_;
     std::vector<QString> rowLetters_;
     QStringList letters_;
     int sortMode_ = 0;
@@ -251,7 +252,7 @@ private:
     std::shared_ptr<const LibrarySnapshot> snap_;
     QString query_;
     std::vector<const TrackItem*> rows_;
-    int total_ = 0;
+        int total_ = 0;
     QVariantList albums_;
     QVariantList artists_;
     QVariantMap top_;

@@ -21,7 +21,8 @@ Item {
     property real reqY: 0
     signal infoRequested(real trackId)
 
-    readonly property bool fav: playlists.revision >= 0 && trackId >= 0 && playlists.isFavorite(trackId)
+    readonly property bool onlineMode: trackId < 0 && !!ctx && !!ctx.isOnline
+    readonly property bool fav: playlists.revision >= 0 && (onlineMode ? playlists.isFavoriteOnline(ctx.onlineKey || "") : (trackId >= 0 && playlists.isFavorite(trackId)))
     readonly property bool albumMode: trackId < 0 && ctx && ctx.albumIndex !== undefined && ctx.albumIndex >= 0
     readonly property bool listMode: trackId < 0 && !albumMode && ctx && ctx.ids !== undefined
     // 菜单作用的曲目:单曲、整张专辑,或一组歌
@@ -161,6 +162,21 @@ Item {
             items = list.filter(e => !e.hide).filter((e, i, a) => e.key !== "sep" || (i > 0 && i < a.length - 1))
             return
         }
+        if (onlineMode) {
+            const oKey = ctx.onlineKey || ""
+            const isCurOnline = player.hasTrack && player.streaming && player.streamKey === oKey
+            const oList = [
+                { key: "play", icon: "play", text: isCurOnline && !player.playing ? qsTr("继续播放") : qsTr("播放"), hide: isCurOnline && player.playing },
+                { key: "playlist", icon: "playlist", text: qsTr("添加到歌单"), sub: true },
+                { key: "fav", icon: menu.fav ? "heart-filled" : "heart", text: menu.fav ? qsTr("取消收藏") : qsTr("收藏") },
+                { key: "sep" },
+                { key: "copyName", icon: "copy", text: qsTr("复制歌名") }
+            ]
+            if (ctx && ctx.playlistId)
+                oList.push({ key: "sep" }, { key: "remove", icon: "trash", text: qsTr("从歌单移除") })
+            items = oList.filter(e => !e.hide).filter((e, i, a) => e.key !== "sep" || (i > 0 && i < a.length - 1 && a[i - 1].key !== "sep"))
+            return
+        }
         const sameAlbum = ctx && ctx.albumIndex !== undefined && ctx.albumIndex === library.albumOfTrack(trackId)
         const q = queueIndex
         const pos = player.queuePosition
@@ -189,6 +205,28 @@ Item {
     }
     function act(key) {
         const id = trackId
+        if (onlineMode) {
+            const meta = (ctx && ctx.onlineMeta && ctx.onlineMeta.id) ? ctx.onlineMeta : playlists.onlineMeta(ctx.onlineKey || "")
+            const oKey = (ctx && ctx.onlineKey) || meta.onlineKey || ""
+            const isCurOnline = player.hasTrack && player.streaming && player.streamKey === oKey
+            if (key === "play") {
+                if (isCurOnline && !player.playing) player.toggle()
+                else if (ctx && typeof ctx.play === "function") ctx.play()
+                else online.playSaved(meta)
+            } else if (key === "fav") {
+                playlists.toggleFavoriteOnline(meta)
+            } else if (key === "remove") {
+                playlists.removeEntry(ctx.playlistId, -1, oKey)
+            } else if (key === "copyName") {
+                const t = meta.artist ? (meta.artist + " - " + (meta.title || "")) : (meta.title || "")
+                if (t.length) {
+                    library.copyToClipboard(t)
+                    Nav.toast("check", qsTr("已复制歌名"))
+                }
+            }
+            close()
+            return
+        }
         if (albumMode && actAlbum(key)) { close(); return }
         if (listMode) { if (actList(key)) close(); return }
         const q = queueIndex
@@ -280,7 +318,8 @@ Item {
     }
     function addTo(pid, name, created) {
         const ids = targetIds()
-        const n = playlists.addTracks(pid, ids)
+        const meta = onlineMode ? ((ctx && ctx.onlineMeta && ctx.onlineMeta.id) ? ctx.onlineMeta : playlists.onlineMeta(ctx.onlineKey || "")) : null
+        const n = onlineMode ? playlists.addOnlineTrack(pid, meta) : playlists.addTracks(pid, ids)
         // 刚新建的歌单用的是默认名字:提示里给一个「重命名」直达
         if (created && n > 0)
             Nav.toastAction(albumMode || listMode ? qsTr("已添加 %1 首到「%2」").arg(n).arg(name) : qsTr("已添加到「%1」").arg(name),

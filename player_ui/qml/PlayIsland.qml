@@ -215,7 +215,7 @@ Item {
     }
     IconButton {
         id: favBtn
-        readonly property bool fav: playlists.revision >= 0 && player.hasTrack && playlists.isFavorite(player.trackId)
+        readonly property bool fav: playlists.revision >= 0 && player.hasTrack && (player.streaming ? playlists.isFavoriteOnline(player.streamKey) : playlists.isFavorite(player.trackId))
         visible: player.hasTrack
         anchors.left: titleCol.right
         anchors.leftMargin: 4
@@ -226,7 +226,7 @@ Item {
         restOpacity: fav ? 1 : 0.6
         iconSize: 16
         tip: (fav ? qsTr("取消收藏") : qsTr("收藏")) + "  Ctrl+L"
-        onClicked: { playlists.toggleFavorite(player.trackId); popNow() }
+        onClicked: { if (player.streaming) playlists.toggleFavoriteOnline(player.streamMeta); else playlists.toggleFavorite(player.trackId); popNow() }
     }
 
     // ---- 中:控制 (相对整条居中) ----

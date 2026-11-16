@@ -633,6 +633,7 @@ void TrackCollectionModel::reload() {
     beginResetModel();
     snap_ = lib_->snapshot();
     rows_.clear();
+    entries_.clear();
     rowLetters_.clear();
     letters_.clear();
     if (source_ == QLatin1String("all")) {
@@ -644,9 +645,9 @@ void TrackCollectionModel::reload() {
     } else if (source_ == QLatin1String("artist")) {
         if (artist_ >= 0 && artist_ < static_cast<int>(snap_->artists.size())) rows_ = snap_->artists[artist_].tracks;
     } else if (source_ == QLatin1String("playlist")) {
-        rows_ = playlists_->tracksOf(playlist_);
+        entries_ = playlists_->entriesOf(playlist_);
     } else if (source_ == QLatin1String("history")) {
-        rows_ = playlists_->historyTracks();
+        entries_ = playlists_->historyEntries();
     }
     endResetModel();
     emit contentChanged();
@@ -659,6 +660,31 @@ QVariant TrackCollectionModel::data(const QModelIndex& index, int role) const {
     if (r < 0 || r >= count()) return {};
     if (role == LetterRole) return r < static_cast<int>(rowLetters_.size()) ? rowLetters_[r] : QString();
     if (role == NumberRole) return r + 1;
+    if (!entries_.empty()) {
+        const auto& e = entries_[r];
+        if (role == OnlineKeyRole) return e.online ? e.key : QString();
+        if (role == IsOnlineRole) return e.online != nullptr;
+        if (e.local) {
+            return TrackRole(*snap_, *e.local, role, lib_->generation(), TitleRole, ArtistRole, AlbumRole, AlbumIndexRole,
+                             DurationRole, QualityRole, CoverRole, TrackIdRole);
+        }
+        if (e.online) {
+            if (role == TrackIdRole) return -1.0;
+            if (role == TitleRole) return e.online->title;
+            if (role == ArtistRole) return e.online->artist;
+            if (role == AlbumRole) return e.online->album;
+            if (role == AlbumIndexRole) return -1;
+            if (role == DurationRole) return LibraryService::formatDuration(e.online->durationMs);
+            if (role == QualityRole) return QString();
+            if (role == CoverRole) {
+                const QString& c = e.online->cover;
+                return (c.startsWith(QLatin1String("file:")) || c.startsWith(QLatin1String("image:"))) ? c : QString();
+            }
+        }
+        return {};
+    }
+    if (role == OnlineKeyRole) return QString();
+    if (role == IsOnlineRole) return false;
     return TrackRole(*snap_, *rows_[r], role, lib_->generation(), TitleRole, ArtistRole, AlbumRole, AlbumIndexRole,
                      DurationRole, QualityRole, CoverRole, TrackIdRole);
 }
@@ -666,11 +692,17 @@ QVariant TrackCollectionModel::data(const QModelIndex& index, int role) const {
 QHash<int, QByteArray> TrackCollectionModel::roleNames() const {
     return {{TrackIdRole, "trackId"},   {TitleRole, "title"},     {ArtistRole, "artist"}, {AlbumRole, "album"},
             {AlbumIndexRole, "albumIndex"}, {DurationRole, "duration"}, {QualityRole, "quality"}, {CoverRole, "cover"},
-            {LetterRole, "letter"},     {NumberRole, "number"}};
+            {LetterRole, "letter"},     {NumberRole, "number"},
+            {OnlineKeyRole, "onlineKey"}, {IsOnlineRole, "isOnline"}};
 }
 
 QVariantList TrackCollectionModel::trackIds() const {
     QVariantList out;
+    if (!entries_.empty()) {
+        out.reserve(static_cast<int>(entries_.size()));
+        for (const auto& e : entries_) if (e.local) out.append(static_cast<double>(e.local->id));
+        return out;
+    }
     out.reserve(static_cast<int>(rows_.size()));
     for (const TrackItem* t : rows_) out.append(static_cast<double>(t->id));
     return out;
@@ -683,6 +715,11 @@ int TrackCollectionModel::indexOfLetter(const QString& letter) const {
 }
 
 int TrackCollectionModel::rowOfTrack(double trackId) const {
+    if (!entries_.empty()) {
+        for (int i = 0; i < count(); ++i)
+            if (entries_[i].local && entries_[i].local->id == static_cast<uint64_t>(trackId)) return i;
+        return -1;
+    }
     for (int i = 0; i < count(); ++i)
         if (rows_[i]->id == static_cast<uint64_t>(trackId)) return i;
     return -1;

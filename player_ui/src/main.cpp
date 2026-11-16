@@ -1088,7 +1088,9 @@ int main(int argc, char* argv[]) {
     historyTracks.setSource("history");
     // 真正开始播放一首歌时记入历史 (恢复上次会话时停在暂停状态的那首,等按下播放才算)
     auto recordPlay = [&player, &playlists]() {
-        if (player.playing() && player.trackId() >= 0) playlists.recordPlay(player.trackId());
+        if (!player.playing()) return;
+        if (player.trackId() >= 0) playlists.recordPlay(player.trackId());
+        else if (player.isStreaming()) playlists.recordOnlinePlay(player.streamMeta());
     };
     QObject::connect(&player, &PlayerController::trackChanged, &playlists, recordPlay);
     QObject::connect(&player, &PlayerController::playingChanged, &playlists, recordPlay);

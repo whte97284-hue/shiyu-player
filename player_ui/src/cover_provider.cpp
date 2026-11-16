@@ -11,6 +11,7 @@
 #include <QSaveFile>
 #include <QStandardPaths>
 #include <QtMath>
+#include <atomic>
 #include <cmath>
 #include <mutex>
 
@@ -81,8 +82,13 @@ class Response : public QQuickImageResponse, public QRunnable {
 public:
     Response(QString id, QSize req) : id_(std::move(id)), req_(req) { setAutoDelete(false); }
     QQuickTextureFactory* textureFactory() const override { return QQuickTextureFactory::textureFactoryForImage(image_); }
+    void cancel() override { cancelled_.store(true, std::memory_order_relaxed); }
 
     void run() override {
+        if (cancelled_.load(std::memory_order_relaxed)) {
+            emit finished();
+            return;
+        }
         image_ = Produce();
         emit finished();
     }
@@ -129,6 +135,7 @@ private:
                 if (f.open(QIODevice::ReadOnly)) jpeg = f.readAll();
                 if (jpeg.isEmpty() || !img.loadFromData(jpeg, "JPG")) {
                     jpeg.clear();
+                    if (cancelled_.load(std::memory_order_relaxed)) return {};
                     img = CoverProvider::LoadTrackCover(*track, bucket);
                     if (!img.isNull()) {
                         jpeg = EncodeJpeg(img);
@@ -156,6 +163,7 @@ private:
     QString id_;
     QSize req_;
     QImage image_;
+    std::atomic<bool> cancelled_{false};
 };
 
 // 三次盒式模糊近似高斯

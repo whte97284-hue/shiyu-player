@@ -224,9 +224,20 @@ Item {
             duration: model.duration
             cover: model.cover
             albumIndex: model.albumIndex
+            isOnline: !!model.isOnline
+            onlineKey: model.onlineKey || ""
             showAlbum: true
             keyFocus: ListView.isCurrentItem
-            onActivated: Nav.picked(player.pickTracks(page.source.trackIds(), index, page.queueTag, false, Nav.pickNow))
+            onActivated: {
+                if (model.isOnline) {
+                    if (current) player.toggle()
+                    else online.playSaved(playlists.onlineMeta(model.onlineKey))
+                } else {
+                    const ids = page.source.trackIds()
+                    const pos = page.showHistory ? ids.indexOf(model.trackId) : index
+                    Nav.picked(player.pickTracks(ids, pos >= 0 ? pos : 0, page.queueTag, false, Nav.pickNow))
+                }
+            }
         }
 
         onContentYChanged: syncLetter.restart()

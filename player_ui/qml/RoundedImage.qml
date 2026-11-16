@@ -38,7 +38,7 @@ Item {
         property vector4d corners: root.corners
         fragmentShader: "qrc:/shaders/rounded.frag.qsb"
         opacity: img.status === Image.Ready ? 1 : 0
-        Behavior on opacity { enabled: root.fadeIn; OpacityAnimator { duration: Theme.normal } }
+        Behavior on opacity { enabled: root.fadeIn; NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
     }
     // 细微内描边,让深色封面在深色背景上也有边界
     Rectangle {

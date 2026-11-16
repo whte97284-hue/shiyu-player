@@ -42,6 +42,9 @@ QVariantMap TrackToMap(const Track& t) {
     x["duration"] = ToQ(t.DurationText());
     x["paywalled"] = t.Paywalled();
     x["privilege"] = t.privilege;
+    x["cover"] = ToQ(t.coverUrl);
+    x["albumId"] = ToQ(t.albumId);
+    x["artistId"] = ToQ(t.artistId);
     return x;
 }
 
@@ -532,12 +535,16 @@ void OnlineService::setSource(int s) {
     artists_.clear();
     albums_.clear();
     playlists_.clear();
+    bestCover_.clear();
     viewMode_ = 0;
     stack_.clear();
     listRow_ = -1;
     emit viewChanged();
     emit tracksChanged();
-    emit tracksReset();
+    emit artistsChanged();
+    emit albumsChanged();
+    emit playlistsChanged();
+    emit bestCoverChanged();
     reload();
 }
 
@@ -599,22 +606,20 @@ void OnlineService::openList(int row) {
     artists_.clear();
     albums_.clear();
     playlists_.clear();
+    bestCover_.clear();
     canMore_ = false;
     if (viewMode_ != 0) { viewMode_ = 0; emit viewChanged(); }
     emit tracksChanged();
+    emit artistsChanged();
+    emit albumsChanged();
+    emit playlistsChanged();
+    emit bestCoverChanged();
     RunAsync([this, p, id, src, name = listName_]() {
         auto songs = p->ListSongs(id, 120);
         QVariantList out;
         std::vector<Track> raw;
         for (const auto& t : songs) {
-            QVariantMap x;
-            x["title"] = ToQ(t.title);
-            x["artist"] = ToQ(t.artist);
-            x["album"] = ToQ(t.album);
-            x["duration"] = ToQ(t.DurationText());
-            x["paywalled"] = t.Paywalled();
-            x["privilege"] = t.privilege;
-            out.append(x);
+            out.append(TrackToMap(t));
             raw.push_back(t);
         }
         QMetaObject::invokeMethod(
@@ -627,9 +632,14 @@ void OnlineService::openList(int row) {
                 artists_.clear();
                 albums_.clear();
                 playlists_.clear();
+                bestCover_.clear();
                 viewMode_ = 0;
                 listName_ = name;
                 emit tracksChanged();
+                emit artistsChanged();
+                emit albumsChanged();
+                emit playlistsChanged();
+                emit bestCoverChanged();
                 emit tracksReset();
                 SetBusy(false);
                 SetStatus(QString());
@@ -652,7 +662,12 @@ void OnlineService::backToLists() {
         artists_.clear();
         albums_.clear();
         playlists_.clear();
+        bestCover_.clear();
         emit tracksChanged();
+        emit artistsChanged();
+        emit albumsChanged();
+        emit playlistsChanged();
+        emit bestCoverChanged();
         emit tracksReset();
     }
 }
@@ -665,6 +680,8 @@ void OnlineService::PushSnapshot() {
     s.tracks = tracks_;
     s.artists = artists_;
     s.albums = albums_;
+    s.playlists = playlists_;
+    s.bestCover = bestCover_;
     s.raw = raw_;
     s.listName = listName_;
     s.keyword = keyword_;
@@ -689,9 +706,13 @@ void OnlineService::openArtist(const QString& id, const QString& name) {
     artists_.clear();
     albums_.clear();
     playlists_.clear();
+    bestCover_.clear();
     emit viewChanged();
     emit tracksChanged();
-    emit tracksReset();
+    emit artistsChanged();
+    emit albumsChanged();
+    emit playlistsChanged();
+    emit bestCoverChanged();
 
     const int src = source_;
     Provider* p = ProviderFor(src);
@@ -767,9 +788,13 @@ void OnlineService::openAlbum(const QString& id, const QString& name) {
     artists_.clear();
     albums_.clear();
     playlists_.clear();
+    bestCover_.clear();
     emit viewChanged();
     emit tracksChanged();
-    emit tracksReset();
+    emit artistsChanged();
+    emit albumsChanged();
+    emit playlistsChanged();
+    emit bestCoverChanged();
 
     const int src = source_;
     Provider* p = ProviderFor(src);
@@ -841,9 +866,13 @@ void OnlineService::openPlaylist(const QString& id, const QString& name) {
     artists_.clear();
     albums_.clear();
     playlists_.clear();
+    bestCover_.clear();
     emit viewChanged();
     emit tracksChanged();
-    emit tracksReset();
+    emit artistsChanged();
+    emit albumsChanged();
+    emit playlistsChanged();
+    emit bestCoverChanged();
     SetBusy(true);
 
     const int src = source_;
@@ -992,6 +1021,8 @@ void OnlineService::back() {
     tracks_ = s.tracks;
     artists_ = s.artists;
     albums_ = s.albums;
+    playlists_ = s.playlists;
+    bestCover_ = s.bestCover;
     raw_ = std::move(s.raw);
     SyncPlayingRow();
     listName_ = s.listName;
@@ -1008,6 +1039,10 @@ void OnlineService::back() {
     emit viewChanged();
     emit keywordChanged();
     emit tracksChanged();
+    emit artistsChanged();
+    emit albumsChanged();
+    emit playlistsChanged();
+    emit bestCoverChanged();
 }
 
 void OnlineService::loadMore() {
@@ -1083,22 +1118,20 @@ void OnlineService::search(const QString& kw) {
     artists_.clear();
     albums_.clear();
     playlists_.clear();
+    bestCover_.clear();
     emit tracksChanged();
+    emit artistsChanged();
+    emit albumsChanged();
+    emit playlistsChanged();
+    emit bestCoverChanged();
 
-    RunAsync([this, p, src, key = kw.toStdString()]() {
+    RunAsync([this, p, src, key = kw.toStdString(), qKey = kw]() {
         auto songs = p->Search(key, 100, 0);
 
         QVariantList out;
         std::vector<Track> raw;
         for (const auto& t : songs) {
-            QVariantMap x;
-            x["title"] = ToQ(t.title);
-            x["artist"] = ToQ(t.artist);
-            x["album"] = ToQ(t.album);
-            x["duration"] = ToQ(t.DurationText());
-            x["paywalled"] = t.Paywalled();
-            x["privilege"] = t.privilege;
-            out.append(x);
+            out.append(TrackToMap(t));
             raw.push_back(t);
         }
 
@@ -1178,71 +1211,161 @@ void OnlineService::search(const QString& kw) {
                     m["id"] = ToQ(a2.id);
                     m["name"] = ToQ(a2.name);
                     m["count"] = a2.songCount;
+                    m["cover"] = ToQ(a2.avatar);
                     artists.append(m);
                 }
             }
         }
 
-        QVariantList albums = buildAlbums({});
+        // 先用搜索返回里已带的封面建一次（网易云立即可用，不再空白等第二轮）
+        std::vector<std::string> covers(bCover.begin(), bCover.begin() + n);
+        std::string bestAlbumId = songs.empty() ? std::string() : songs[0].albumId;
+        std::string initialBest = songs.empty() ? std::string() : songs[0].coverUrl;
+        int bestAlbumIdx = -1;
+        if (!bestAlbumId.empty()) {
+            for (int i = 0; i < n; ++i) {
+                if (bAlbumId[static_cast<size_t>(i)] == bestAlbumId) {
+                    bestAlbumIdx = i;
+                    if (initialBest.empty()) initialBest = covers[static_cast<size_t>(i)];
+                    break;
+                }
+            }
+        }
+        if (initialBest.empty() && n > 0 && !covers[0].empty() && bestAlbumId.empty()) {
+            initialBest = covers[0];
+        }
+
+        QVariantList albums = buildAlbums(covers);
         const bool more = songs.size() >= 100;
         QMetaObject::invokeMethod(
             this,
             [this, out, raw, artists, albums, pv, src, more,
+             bestCover = ToQ(initialBest), qKey,
              name = tr("搜索：%1").arg(ToQ(key))]() {
-                if (src != source_ || viewMode_ != 1) return;
+                if (src != source_ || viewMode_ != 1 || keyword_ != qKey) return;
                 tracks_ = out;
                 raw_ = raw;
                 artists_ = artists;
                 albums_ = albums;
                 playlists_ = pv;
+                bestCover_ = bestCover;
                 viewMode_ = 1;
                 listName_ = name;
                 canMore_ = more;
                 SyncPlayingRow();
                 emit tracksChanged();
+                emit artistsChanged();
+                emit albumsChanged();
+                emit playlistsChanged();
+                emit bestCoverChanged();
                 emit tracksReset();
                 SetBusy(false);
                 SetStatus(out.isEmpty() ? tr("没有结果") : QString());
             },
             Qt::QueuedConnection);
 
-        if (n <= 0) return;
+        const bool needBestFetch =
+            src == 0 && initialBest.empty() && !bestAlbumId.empty() && bestAlbumIdx < 0;
+        int missingCount = needBestFetch ? 1 : 0;
+        if (src == 0) {
+            for (int i = 0; i < n; ++i) {
+                if (covers[static_cast<size_t>(i)].empty() && !bAlbumId[static_cast<size_t>(i)].empty())
+                    ++missingCount;
+            }
+        }
+        if (missingCount == 0) return;
 
-        // 封面随后补：6 路并行，8 张两轮就回来；补上时只发 tracksChanged，
-        // 不发 tracksReset —— 否则列表会再淡入一次，反而更"跳"
-        std::vector<std::string> covers(static_cast<size_t>(n));
+        // 封面随后补（仅酷狗缺封面的专辑 + 最佳匹配曲目）：补上时只发 albumsChanged /
+        // bestCoverChanged，不动 tracksChanged，列表行与滚动位置完全不被打断。
+        std::string fetchedBestCover = initialBest;
         std::atomic<int> next{0};
+        const int totalTasks = n + (needBestFetch ? 1 : 0);
         auto fetchOne = [&]() {
             for (;;) {
-                const int i = next.fetch_add(1);
-                if (i >= n) break;
-                covers[static_cast<size_t>(i)] =
-                    src == 0 ? KugouAlbumCover(bAlbumId[static_cast<size_t>(i)])
-                             : bCover[static_cast<size_t>(i)];
+                const int idx = next.fetch_add(1);
+                if (idx >= totalTasks) break;
+                if (idx < n) {
+                    if (covers[static_cast<size_t>(idx)].empty() &&
+                        !bAlbumId[static_cast<size_t>(idx)].empty()) {
+                        covers[static_cast<size_t>(idx)] =
+                            KugouAlbumCover(bAlbumId[static_cast<size_t>(idx)]);
+                    }
+                } else {
+                    fetchedBestCover = KugouAlbumCover(bestAlbumId);
+                }
             }
         };
         std::vector<std::thread> pool;
-        const int lanes = std::min(6, n);
+        const int lanes = std::min(6, missingCount);
         for (int i = 0; i < lanes; ++i) pool.emplace_back(fetchOne);
         for (auto& t : pool) t.join();
 
+        if (fetchedBestCover.empty() && bestAlbumIdx >= 0) {
+            fetchedBestCover = covers[static_cast<size_t>(bestAlbumIdx)];
+        }
+        if (fetchedBestCover.empty() && n > 0 && bestAlbumId.empty()) {
+            fetchedBestCover = covers[0];
+        }
+
         QVariantList withCovers = buildAlbums(covers);
+        const QString finalBest = ToQ(fetchedBestCover);
         QMetaObject::invokeMethod(
             this,
-            [this, withCovers, src]() {
-                if (src != source_ || viewMode_ != 1) return;
+            [this, withCovers, finalBest, src, qKey]() {
+                if (src != source_ || viewMode_ != 1 || keyword_ != qKey) return;
                 albums_ = withCovers;
-                emit tracksChanged();
+                emit albumsChanged();
+                if (!finalBest.isEmpty() && finalBest != bestCover_) {
+                    bestCover_ = finalBest;
+                    emit bestCoverChanged();
+                }
             },
             Qt::QueuedConnection);
     });
 }
 
+QVariantMap OnlineService::trackMeta(int row) const {
+    if (row < 0 || row >= static_cast<int>(raw_.size())) return {};
+    const Track& t = raw_[row];
+    QVariantMap m;
+    m["source"] = static_cast<int>(t.source);
+    m["id"] = ToQ(t.id);
+    m["albumId"] = ToQ(t.albumId);
+    m["title"] = ToQ(t.title);
+    m["artist"] = ToQ(t.artist);
+    m["album"] = ToQ(t.album);
+    m["durationMs"] = t.durationMs;
+    m["cover"] = ToQ(t.coverUrl);
+    m["paywalled"] = t.Paywalled();
+    m["onlineKey"] = QStringLiteral("online:%1:%2").arg(static_cast<int>(t.source)).arg(ToQ(t.id));
+    return m;
+}
+
 void OnlineService::play(int row) {
     if (Blocked()) return;
     if (row < 0 || row >= static_cast<int>(raw_.size())) return;
-    const Track t = raw_[row];
-    const int src = source_;
+    PlayTrack(raw_[row], source_, row);
+}
+
+void OnlineService::playSaved(const QVariantMap& meta) {
+    if (Blocked()) return;
+    const QString id = meta.value("id").toString().trimmed();
+    if (id.isEmpty()) return;
+    const int src = meta.value("source").toInt();
+    Track t;
+    t.source = static_cast<Source>(src);
+    t.id = id.toStdString();
+    t.albumId = meta.value("albumId").toString().toStdString();
+    t.title = meta.value("title").toString().toStdString();
+    t.artist = meta.value("artist").toString().toStdString();
+    t.album = meta.value("album").toString().toStdString();
+    t.durationMs = meta.value("durationMs").toInt();
+    t.coverUrl = meta.value("cover").toString().toStdString();
+    (void)meta.value("paywalled");
+    PlayTrack(t, src, -1);
+}
+
+void OnlineService::PlayTrack(const Track& t, int src, int row) {
     Provider* p = ProviderFor(src);
     if (!p) return;
 

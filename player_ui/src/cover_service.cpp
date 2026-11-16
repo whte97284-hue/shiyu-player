@@ -44,16 +44,54 @@ bool HasCover(const std::wstring& path) {
 }
 
 // 专辑名归一化:去掉括号里的版本说明、空白与标点,ASCII 转小写。
-// 「桜色ダイアリー (Special Edition)」与「桜色ダイアリー」应视为同一张。
+// 「桜色ダイアリー (Special Edition)」与「桜色ダイアリー」应视为同一张；
+// 但括号里若包含碟号/Live/OST 等实质区分词(如 Disc 1 / Disc 2 / Live / OST),保留其内容以免互相借错。
 std::wstring NormalizeKey(const QString& text) {
     const std::wstring in = text.toStdWString();
     std::wstring out;
     out.reserve(in.size());
+
+    auto appendNormalized = [&](const std::wstring& seg) {
+        for (wchar_t c : seg) {
+            if (c == L' ' || c == L'\t' || c == L'-' || c == L'_' || c == L'.' || c == L',' || c == L'!' ||
+                c == L'?' || c == L'\'' || c == L'"' || c == L'/' || c == L':' || c == L';' || c == L'&')
+                continue;
+            out.push_back(static_cast<wchar_t>(::towlower(c)));
+        }
+    };
+    auto shouldKeepBracket = [](const std::wstring& seg) {
+        std::wstring low;
+        low.reserve(seg.size());
+        for (wchar_t c : seg) low.push_back(static_cast<wchar_t>(::towlower(c)));
+        static const wchar_t* const kKeepTokens[] = {
+            L"disc", L"disk", L"cd", L"vol", L"part", L"side", L"ost", L"soundtrack",
+            L"live", L"instrumental", L"karaoke", L"remix", L"acoustic", L"unplugged"
+        };
+        for (const wchar_t* tok : kKeepTokens) {
+            if (low.find(tok) != std::wstring::npos) return true;
+        }
+        return false;
+    };
+
     int depth = 0;
+    std::wstring bracketBuf;
     for (wchar_t c : in) {
-        if (c == L'(' || c == L'[' || c == L'<' || c == L'\uFF08' || c == L'\u3010') { ++depth; continue; }
-        if (c == L')' || c == L']' || c == L'>' || c == L'\uFF09' || c == L'\u3011') { if (depth) --depth; continue; }
-        if (depth) continue;
+        if (c == L'(' || c == L'[' || c == L'<' || c == L'\uFF08' || c == L'\u3010') {
+            if (depth == 0) bracketBuf.clear();
+            ++depth;
+            continue;
+        }
+        if (c == L')' || c == L']' || c == L'>' || c == L'\uFF09' || c == L'\u3011') {
+            if (depth > 0) {
+                --depth;
+                if (depth == 0 && shouldKeepBracket(bracketBuf)) appendNormalized(bracketBuf);
+            }
+            continue;
+        }
+        if (depth > 0) {
+            bracketBuf.push_back(c);
+            continue;
+        }
         if (c == L' ' || c == L'\t' || c == L'-' || c == L'_' || c == L'.' || c == L',' || c == L'!' ||
             c == L'?' || c == L'\'' || c == L'"' || c == L'/' || c == L':' || c == L';' || c == L'&')
             continue;
@@ -162,10 +200,14 @@ void CoverService::fetchAlbums(const QVariantList& indexes) {
         Job j;
         j.index = idx;
         j.title = a.title.toStdWString();
-        // 代表曲目:第一首有歌名的;没有就记一笔失败(用户要能看到原因)
+        // 代表曲目:优先选「有歌名且艺人匹配专辑艺人(或有艺人标签)」的曲目,避开纯序号/缺艺人导致的错搜
         const TrackItem* rep = nullptr;
+        const std::wstring albumArtist = a.artist.toStdWString();
         for (const TrackItem* t : a.tracks) {
-            if (!t->title.empty()) { rep = t; break; }
+            if (t->title.empty()) continue;
+            if (!rep) rep = t;
+            if (!albumArtist.empty() && t->artist == albumArtist) { rep = t; break; }
+            if (rep->artist.empty() && !t->artist.empty()) rep = t;
         }
         if (!rep) {
             j.skipReason = "曲目没有标题标签,无法检索";
@@ -173,7 +215,7 @@ void CoverService::fetchAlbums(const QVariantList& indexes) {
             continue;
         }
         j.searchTitle = rep->title;
-        j.searchArtist = rep->artist;
+        j.searchArtist = !rep->artist.empty() ? rep->artist : albumArtist;
         j.probe = rep->file_path;
         // 从文件名提取备用标题:「艺人 - 标题」取后半段(标签被翻成罗马字时靠它搜索)
         {
@@ -191,16 +233,15 @@ void CoverService::fetchAlbums(const QVariantList& indexes) {
             j.targets.push_back(t->file_path);
         }
         // 同一张专辑常有多个版本(日文原名 / 罗马字 / Special Edition),库里只要有一个带封面,
-        // 直接借过来 —— 不用联网,也不会拿错(专辑名归一化后相同)。
+        // 直接借过来 —— 收集全部候选版本,某个损坏时可继续尝试下一候选或回退联网搜索。
         if (!j.targets.empty()) {
             const std::wstring wantAlbum = NormalizeKey(a.title);
-            for (int k = 0; k < static_cast<int>(s->albums.size()) && j.borrowFrom.empty(); ++k) {
+            for (int k = 0; k < static_cast<int>(s->albums.size()); ++k) {
                 if (k == idx) continue;
                 const AlbumInfo& other = s->albums[k];
                 if (NormalizeKey(other.title) != wantAlbum || wantAlbum.empty()) continue;
-                if (!other.coverTrack) continue;
-                if (!other.coverTrack->has_cover) continue;   // 只借"文件里真有封面"的
-                j.borrowFrom = other.coverTrack->file_path;
+                if (!other.coverTrack || !other.coverTrack->has_cover) continue;
+                j.borrowCandidates.push_back(other.coverTrack->file_path);
             }
         }
         if (j.targets.empty()) {
@@ -254,7 +295,8 @@ void CoverService::start(std::vector<Job> jobs) {
     worker_ = std::thread([self, jobs = std::move(jobs), cancel, nThreads]() {
         // ---- 共享状态(worker 之间要加锁) ----
         std::atomic<size_t> next{0};
-        std::atomic<int> ok{0}, fail{0}, skip{0}, done{0};
+        std::atomic<int> ok{0}, fail{0}, skip{0}, done{0}, wroteAny{0};
+        std::atomic<qint64> lastPostMs{0};
         std::mutex mtx;
         std::vector<std::pair<QString, QString>> fails;
         std::vector<std::pair<QString, QString>> skips;
@@ -280,28 +322,33 @@ void CoverService::start(std::vector<Job> jobs) {
                 everHad.emplace_back(jtitle);
                 return;
             }
-            if (!j.borrowFrom.empty()) {
+            if (!j.borrowCandidates.empty()) {
                 ParseOptions po;
                 po.load_cover = true;
-                AudioMetadata bm;
-                if (AudioTagParser::ParseFile(j.borrowFrom, bm, po) && bm.has_cover && !bm.cover_data.empty()) {
-                    int wrote = 0;
-                    QString lastErr;
-                    const std::string img(bm.cover_data.begin(), bm.cover_data.end());
-                    for (const std::wstring& t : todo) {
-                        std::string e;
-                        if (cover_core::EmbedCover(t, img, bm.cover_mime_type, &e)) ++wrote;
-                        else lastErr = QString::fromStdString(e);
+                for (const std::wstring& cand : j.borrowCandidates) {
+                    AudioMetadata bm;
+                    if (AudioTagParser::ParseFile(cand, bm, po) && bm.has_cover && !bm.cover_data.empty()) {
+                        int wrote = 0;
+                        QString lastErr;
+                        const std::string img(bm.cover_data.begin(), bm.cover_data.end());
+                        for (const std::wstring& t : todo) {
+                            std::string e;
+                            if (cover_core::EmbedCover(t, img, bm.cover_mime_type, &e)) ++wrote;
+                            else lastErr = QString::fromStdString(e);
+                        }
+                        if (wrote > 0) {
+                            wroteAny.fetch_add(wrote);
+                            std::lock_guard<std::mutex> l(mtx);
+                            ++ok;
+                        } else {
+                            std::lock_guard<std::mutex> l(mtx);
+                            ++fail;
+                            fails.emplace_back(jtitle, QStringLiteral("借用写入失败: ") + lastErr);
+                        }
+                        return;
                     }
-                    std::lock_guard<std::mutex> l(mtx);
-                    if (wrote > 0) ++ok;
-                    else { ++fail; fails.emplace_back(jtitle, QStringLiteral("借用写入失败: ") + lastErr); }
-                    return;
                 }
-                std::lock_guard<std::mutex> l(mtx);
-                ++fail;
-                fails.emplace_back(jtitle, QStringLiteral("同专辑版本没有可借的封面"));
-                return;
+                // 所有同专辑候选版本都未能读出封面，继续回退到联网搜索
             }
 
             cover_core::FlacTags tags;
@@ -320,9 +367,15 @@ void CoverService::start(std::vector<Job> jobs) {
                     if (cover_core::EmbedCover(t, r.jpeg, r.mime, &e)) ++wrote;
                     else lastErr = QString::fromStdString(e);
                 }
-                std::lock_guard<std::mutex> l(mtx);
-                if (wrote > 0) ++ok;
-                else { ++fail; fails.emplace_back(jtitle, QStringLiteral("写入失败: ") + lastErr); }
+                if (wrote > 0) {
+                    wroteAny.fetch_add(wrote);
+                    std::lock_guard<std::mutex> l(mtx);
+                    ++ok;
+                } else {
+                    std::lock_guard<std::mutex> l(mtx);
+                    ++fail;
+                    fails.emplace_back(jtitle, QStringLiteral("写入失败: ") + lastErr);
+                }
             } else {
                 std::lock_guard<std::mutex> l(mtx);
                 ++fail;
@@ -333,6 +386,7 @@ void CoverService::start(std::vector<Job> jobs) {
         // ---- 线程池 ----
         std::vector<std::thread> pool;
         pool.reserve(static_cast<size_t>(nThreads));
+        size_t sentFails = 0, sentSkips = 0;
         for (int t = 0; t < nThreads; ++t) {
             pool.emplace_back([&]() {
                 for (;;) {
@@ -344,31 +398,45 @@ void CoverService::start(std::vector<Job> jobs) {
                     if (kDelayMs > 0) std::this_thread::sleep_for(std::chrono::milliseconds(kDelayMs));
                     runOne(j);
                     const int d = ++done;
-                    // 进度节流:每 80ms 最多上报一次,避免几十个 queued 调用把 UI 事件循环挤满
-                    static thread_local qint64 lastPost = 0;
+                    // 全局进度节流:所有工作线程共享 80ms 节流窗口,避免多线程同时刷 UI 事件循环
                     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-                    if (now - lastPost < 80 && d < static_cast<int>(jobs.size())) continue;
-                    lastPost = now;
+                    qint64 prev = lastPostMs.load(std::memory_order_relaxed);
+                    if (d < static_cast<int>(jobs.size())) {
+                        if (now - prev < 80 || !lastPostMs.compare_exchange_strong(prev, now)) continue;
+                    } else {
+                        lastPostMs.store(now, std::memory_order_relaxed);
+                    }
 
                     QVariantList sf, ss;
-                    QString cur, lastTitle;
+                    bool hasNewFails = false, hasNewSkips = false;
+                    QString lastTitle;
                     int cOk = 0, cFail = 0, cSkip = 0;
                     {
                         std::lock_guard<std::mutex> l(mtx);
-                        for (const auto& f : fails) { QVariantMap m; m["title"] = f.first; m["reason"] = f.second; sf.push_back(m); }
-                        for (const auto& f : skips) { QVariantMap m; m["title"] = f.first; m["reason"] = f.second; ss.push_back(m); }
+                        if (fails.size() != sentFails) {
+                            sentFails = fails.size();
+                            hasNewFails = true;
+                            sf.reserve(static_cast<int>(fails.size()));
+                            for (const auto& f : fails) { QVariantMap m; m["title"] = f.first; m["reason"] = f.second; sf.push_back(m); }
+                        }
+                        if (skips.size() != sentSkips) {
+                            sentSkips = skips.size();
+                            hasNewSkips = true;
+                            ss.reserve(static_cast<int>(skips.size()));
+                            for (const auto& f : skips) { QVariantMap m; m["title"] = f.first; m["reason"] = f.second; ss.push_back(m); }
+                        }
                         cOk = ok; cFail = fail; cSkip = skip;
                         lastTitle = QString::fromStdWString(j.title);
                     }
-                    QMetaObject::invokeMethod(self, [self, d, n, cOk, cFail, cSkip, sf, ss, lastTitle]() {
+                    QMetaObject::invokeMethod(self, [self, d, n, cOk, cFail, cSkip, sf, ss, hasNewFails, hasNewSkips, lastTitle]() {
                         if (!self) return;
                         self->done_ = d;
                         self->progress_ = static_cast<double>(d) / n;
                         self->ok_ = cOk;
                         self->fail_ = cFail;
                         self->skip_ = cSkip;
-                        self->failures_ = sf;
-                        self->skips_ = ss;
+                        if (hasNewFails) self->failures_ = sf;
+                        if (hasNewSkips) self->skips_ = ss;
                         self->current_ = lastTitle;
                         emit self->progressChanged();
                         emit self->jobChanged();
@@ -379,6 +447,7 @@ void CoverService::start(std::vector<Job> jobs) {
         for (auto& th : pool) th.join();
 
         const bool cancelled = cancel->load();
+        const bool needRescan = !cancelled && (wroteAny.load() > 0 || !everHad.empty());
         QVariantList alreadyOk;
         {
             std::lock_guard<std::mutex> l(mtx);
@@ -392,7 +461,7 @@ void CoverService::start(std::vector<Job> jobs) {
             for (const auto& f : skips) { QVariantMap m; m["title"] = f.first; m["reason"] = f.second; finalSkips.push_back(m); }
             fOk = ok; fFail = fail; fSkip = skip;
         }
-        QMetaObject::invokeMethod(self, [self, fOk, fFail, fSkip, cancelled, finalFails, finalSkips, alreadyOk]() {
+        QMetaObject::invokeMethod(self, [self, fOk, fFail, fSkip, cancelled, needRescan, finalFails, finalSkips, alreadyOk]() {
             if (!self) return;
             self->busy_ = false;
             self->progress_ = cancelled ? self->progress_ : 1.0;
@@ -408,9 +477,8 @@ void CoverService::start(std::vector<Job> jobs) {
             qWarning("KPCV finish done=%d total=%d ok=%d fail=%d skip=%d cancelled=%d",
                      self->done_, self->total_, fOk, fFail, fSkip, cancelled ? 1 : 0);
             emit self->finished(fOk, fFail);
-            // ★ 无论成功 / 跳过 / 失败都重扫:
-            //   文件可能在上次扫描之后就被别的途径补过封面,快照里的 has_cover 是旧的。
-            if (!cancelled && self->lib_) self->lib_->rescan();
+            // 仅当本批次确实写入了封面或发现磁盘已有封面时才重扫曲库,避免全跳过/全失败时白白重扫
+            if (needRescan && self->lib_) self->lib_->rescan();
         }, Qt::QueuedConnection);
     });
 }
@@ -517,7 +585,7 @@ void CoverService::checkStale() {
             if (!self || cancelled) return;
             QVariantList list;
             for (const QString& h : hits) list.push_back(h);
-            if (list.size() != self->alreadied_.size()) {
+            if (list != self->alreadied_) {
                 self->alreadied_ = list;
                 emit self->jobChanged();
             }

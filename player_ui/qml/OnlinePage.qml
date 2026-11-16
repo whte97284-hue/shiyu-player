@@ -22,14 +22,27 @@ Item {
     readonly property var qualNames: ["无损", "320K", "128K"]
     readonly property var best: online.tracks.length > 0 ? online.tracks[0] : null
     readonly property bool hasMeta: online.tracks.length > 0
-    // 内容整体换一批时压一下透明度再回来：一个动画顶替上百行的逐行动画
-    property real contentFade: 1
+    readonly property real pxScale: Screen.devicePixelRatio > 0 ? Screen.devicePixelRatio : 1
+    // 搜索结果页键盘选中的歌曲下标
+    property int sel: -1
     // 结果换了要回到顶部：新内容比旧的矮/高，不重置就会停在半空
     property bool pinTop: true
     function rewind() {
-        // 已经在顶部就别再调：布局期间反复 positionView 会和 onHeightChanged 互相触发
         if (!pinTop || searchView.contentY <= searchView.originY + 1) return
         searchView.positionViewAtBeginning()
+    }
+    function moveSel(d) {
+        if (online.viewMode < 1) return
+        const n = online.tracks.length
+        if (n === 0) return
+        sel = Math.max(-1, Math.min(n - 1, sel + d))
+        if (sel < 0) {
+            pinTop = true
+            searchView.positionViewAtBeginning()
+            return
+        }
+        pinTop = false
+        searchView.positionViewAtIndex(sel, ListView.Contain)
     }
     function fmtCount(n) {
         if (!n) return ""
@@ -43,18 +56,69 @@ Item {
         property string icon
         property int count
         property bool want: false
-        // 用高度做过渡：直接切 visible 会让 header 一帧内少 34px
-        visible: height > 0.5
-        height: want ? 34 : 0
-        Behavior on height { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+        visible: want && count > 0
+        height: visible ? 28 : 0
         spacing: 8
         leftPadding: 2
-        Icon { anchors.verticalCenter: parent.verticalCenter; name: parent.icon; size: 15; opacity: 0.45 }
+        Icon { anchors.verticalCenter: parent.verticalCenter; name: parent.icon; size: 15; opacity: 0.5 }
         Text {
             anchors.verticalCenter: parent.verticalCenter
             text: parent.count.toLocaleString(Qt.locale(), "f", 0)
             color: Theme.textTertiary
+            font.family: Theme.fontFamily
             font.pixelSize: 12
+        }
+    }
+
+    // 横向滚动条左右翻页微调按钮（只在有溢出且悬停时浮现，避免桌面鼠标用户翻不动横向带）
+    component StripArrows: Item {
+        id: arrows
+        property ListView targetView
+        property var scroller
+        property bool hostHovered: false
+        anchors.fill: parent
+        z: 3
+        readonly property bool showLeft: hostHovered && targetView && !targetView.atXBeginning
+        readonly property bool showRight: hostHovered && targetView && !targetView.atXEnd
+        Rectangle {
+            width: 30; height: 30; radius: 15
+            anchors.left: parent.left; anchors.leftMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            color: Theme.panel
+            border.width: 1; border.color: leftMouse.containsMouse ? Theme.accentAlpha(0.5) : Theme.hairline
+            opacity: arrows.showLeft ? 0.92 : 0
+            visible: opacity > 0.01
+            scale: leftMouse.pressed ? 0.9 : 1
+            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
+            Icon { anchors.centerIn: parent; name: "back"; size: 11; tint: Theme.text }
+            MouseArea {
+                id: leftMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (arrows.scroller && arrows.targetView) arrows.scroller.scrollTo(arrows.scroller.destination() - Math.max(240, arrows.targetView.width * 0.72))
+            }
+        }
+        Rectangle {
+            width: 30; height: 30; radius: 15
+            anchors.right: parent.right; anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            color: Theme.panel
+            border.width: 1; border.color: rightMouse.containsMouse ? Theme.accentAlpha(0.5) : Theme.hairline
+            opacity: arrows.showRight ? 0.92 : 0
+            visible: opacity > 0.01
+            scale: rightMouse.pressed ? 0.9 : 1
+            Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+            Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
+            Icon { anchors.centerIn: parent; name: "back"; size: 11; tint: Theme.text; rotation: 180 }
+            MouseArea {
+                id: rightMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (arrows.scroller && arrows.targetView) arrows.scroller.scrollTo(arrows.scroller.destination() + Math.max(240, arrows.targetView.width * 0.72))
+            }
         }
     }
 
@@ -74,21 +138,25 @@ Item {
     Connections {
         target: online
         function onToast(t) { Nav.toast("info", t) }
-        // 榜单列表变化不动内容淡入：只有歌曲列表换批才需要
         function onTracksReset() {
-            if (!refreshFade.running) refreshFade.start()
+            page.sel = -1
             page.pinTop = true
             Qt.callLater(page.rewind)
+            if (online.viewMode >= 1) searchRefresh.restart()
+            else browseRefresh.restart()
         }
     }
-    // 不可重入：同一帧里被 restart 两次会把透明度硬拽回去，看起来就是"闪一下"
-    NumberAnimation {
-        id: refreshFade
-        target: page
-        property: "contentFade"
-        from: 0.86
+    ParallelAnimation {
+        id: searchRefresh
+        OpacityAnimator { target: searchView; from: 0.35; to: 1; duration: Theme.normal; easing.type: Easing.OutCubic }
+        NumberAnimation { target: searchShift; property: "y"; from: 10; to: 0; duration: 360; easing.type: Easing.OutQuint }
+    }
+    OpacityAnimator {
+        id: browseRefresh
+        target: trackList
+        from: 0.45
         to: 1
-        duration: 110
+        duration: Theme.fast
         easing.type: Easing.OutCubic
     }
 
@@ -325,40 +393,43 @@ Item {
         }
     }
 
-    // ── 搜索框 ────────────────────────────────────────────────────────
+    // ── 搜索框（交互语言向本地搜索对齐：强调色聚焦、一键清空、↑↓ 选歌、Esc 退回）────
     Rectangle {
         id: searchBox
         x: page.sidePadding
         y: header.y + header.height + 14
-        width: Math.min(520, page.width - page.sidePadding * 2)
-        height: 40
-        radius: 20
+        width: Math.min(540, page.width - page.sidePadding * 2)
+        height: 42
+        radius: 21
         color: Theme.hover
         border.width: 1
-        border.color: input.activeFocus ? Theme.accentAlpha(0.6) : Theme.hairline
+        border.color: input.activeFocus ? Theme.accentAlpha(0.55) : Theme.hairline
         Behavior on border.color { ColorAnimation { duration: Theme.fast } }
 
         Icon {
             id: searchIcon
             anchors.left: parent.left
-            anchors.leftMargin: 15
+            anchors.leftMargin: 16
             anchors.verticalCenter: parent.verticalCenter
             name: "search"
-            size: 14
-            opacity: 0.42
+            size: 15
+            tint: input.activeFocus ? Theme.accent : "transparent"
+            opacity: input.activeFocus ? 0.95 : 0.45
         }
         TextInput {
             id: input
             anchors.left: searchIcon.right
             anchors.leftMargin: 10
-            anchors.right: parent.right
-            anchors.rightMargin: online.busy ? 34 : 15
+            anchors.right: clearOrSpin.left
+            anchors.rightMargin: 6
             anchors.verticalCenter: parent.verticalCenter
             color: Theme.text
-            font.pixelSize: 13
+            selectionColor: Theme.accentAlpha(0.4)
+            selectedTextColor: Theme.text
+            font.family: Theme.fontFamily
+            font.pixelSize: 14
             selectByMouse: true
             clip: true
-            // 一进输入状态就淡出：光标压在提示字上很难看，也分不清自己到底在不在输入
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 visible: opacity > 0.01
@@ -366,58 +437,91 @@ Item {
                 Behavior on opacity { NumberAnimation { duration: Theme.fast } }
                 text: qsTr("搜索在线歌曲、歌手或专辑")
                 color: Theme.textTertiary
+                font.family: Theme.fontFamily
                 font.pixelSize: 13
             }
-            onAccepted: online.search(text)
+            onTextChanged: page.sel = -1
+            onAccepted: {
+                if (online.viewMode >= 1 && page.sel >= 0 && page.sel < online.tracks.length) {
+                    online.play(page.sel)
+                } else {
+                    online.search(text)
+                }
+            }
+            Keys.onDownPressed: page.moveSel(1)
+            Keys.onUpPressed: page.moveSel(-1)
+            Keys.onEscapePressed: {
+                if (text.length > 0) {
+                    text = ""
+                } else if (online.isDetail) {
+                    online.back()
+                } else if (online.viewMode === 1) {
+                    online.backToLists()
+                }
+            }
         }
-        // 请求期间在输入框里转圈：点击到出结果之间不再是"什么都不发生"
-        Icon {
+        Item {
+            id: clearOrSpin
             anchors.right: parent.right
-            anchors.rightMargin: 14
+            anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
-            name: "spinner"
-            size: 13
-            visible: online.busy
-            opacity: 0.55
-            RotationAnimator on rotation {
-                running: online.busy
-                loops: Animation.Infinite
-                from: 0
-                to: 360
-                duration: 900
+            width: 28; height: 28
+
+            Icon {
+                anchors.centerIn: parent
+                name: "spinner"
+                size: 13
+                visible: online.busy
+                opacity: 0.6
+                RotationAnimator on rotation {
+                    running: online.busy
+                    loops: Animation.Infinite
+                    from: 0
+                    to: 360
+                    duration: 900
+                }
+            }
+            IconButton {
+                anchors.centerIn: parent
+                width: 28; height: 28
+                icon: "close"
+                iconSize: 12
+                visible: !online.busy && input.text.length > 0
+                opacity: visible ? 0.85 : 0
+                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                onClicked: {
+                    input.text = ""
+                    input.forceActiveFocus()
+                    if (online.viewMode === 1) online.backToLists()
+                }
             }
         }
         MouseArea {
             anchors.fill: parent
+            anchors.rightMargin: 36
             propagateComposedEvents: true
             cursorShape: Qt.IBeamCursor
             onClicked: (m) => { input.forceActiveFocus(); m.accepted = false }
         }
     }
 
-    // 右侧只留一个数字和「返回榜单」，其余信息靠列表本身表达
+    // 右侧只留返回入口，数量统一由列表内 Marker 表达，不重复报数
     Row {
         anchors.right: parent.right
         anchors.rightMargin: page.sidePadding
         anchors.verticalCenter: searchBox.verticalCenter
         spacing: 10
 
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            visible: page.hasMeta
-            text: qsTr("%1 首").arg(online.tracks.length)
-            color: Theme.textTertiary
-            font.pixelSize: 11
-        }
         Rectangle {
             visible: online.viewMode >= 1
-            width: backRow.implicitWidth + 16
-            height: 26; radius: 13
+            width: backRow.implicitWidth + 20
+            height: 30; radius: 15
             anchors.verticalCenter: parent.verticalCenter
-            color: backMouse.containsMouse ? page.dim : "transparent"
+            color: backMouse.pressed ? Theme.pressed : (backMouse.containsMouse ? page.dim : Theme.hover)
             border.width: 1
-            border.color: Theme.hairline
+            border.color: backMouse.containsMouse ? Theme.accentAlpha(0.4) : Theme.hairline
             Behavior on color { ColorAnimation { duration: Theme.fast } }
+            Behavior on border.color { ColorAnimation { duration: Theme.fast } }
             Row {
                 id: backRow
                 anchors.centerIn: parent
@@ -538,14 +642,15 @@ Item {
         height: page.height - y - page.bottomInset
         property real modeFade: online.viewMode === 0 ? 1 : 0
         Behavior on modeFade { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
-        opacity: modeFade * page.contentFade
+        opacity: modeFade
         visible: opacity > 0.01
 
         ListView {
             id: trackList
             anchors.fill: parent
             clip: true
-            spacing: 1
+            cacheBuffer: 600
+            spacing: 2
             model: online.tracks
             boundsBehavior: Flickable.StopAtBounds
             SmoothScroll { flickable: trackList }
@@ -556,15 +661,24 @@ Item {
                 rowIndex: index
                 width: trackList.width
                 title: modelData.title
-                subtitle: modelData.artist + (modelData.album.length ? " · " + modelData.album : "")
+                artist: modelData.artist || ""
+                album: modelData.album || ""
+                showAlbum: true
                 duration: modelData.duration
                 paywalled: modelData.paywalled
                 active: online.playing === index
                 playing: online.playing === index && player.playing
                 pending: online.pending === index
                 accent: page.accent
+                fav: playlists.revision >= 0 && playlists.isFavoriteOnline(online.trackMeta(index).onlineKey || "")
                 onPlayed: online.playing === index ? player.toggle() : online.play(index)
                 onDownloaded: online.download(index)
+                onFavorited: playlists.toggleFavoriteOnline(online.trackMeta(index))
+                onMenuRequested: (px, py) => {
+                    const m = online.trackMeta(index)
+                    const p = mapToItem(null, px, py)
+                    Nav.trackMenu(-1, p.x, p.y, { isOnline: true, onlineKey: m.onlineKey || "", onlineMeta: m, play: () => (online.playing === index ? player.toggle() : online.play(index)) })
+                }
             }
         }
 
@@ -588,38 +702,38 @@ Item {
         }
     }
 
-    // ── 搜索模式：最佳匹配 / 歌手 / 专辑 / 歌曲 ──────────────────────
-    //
-    // 用 ListView 而不是 Flickable + Repeater：Repeater 会一次性把 60 行全建出来
-    // （每行十来个元素 + 图标），创建那一下就是肉眼可见的顿。ListView 只建可见的十来行。
-    // 最佳匹配 / 歌手 / 专辑放进 header，跟着一起滚。
+    // ── 搜索 / 详情模式：对齐本地 SearchPage 的排版与滚屏体验 ─────────────────
     ListView {
         id: searchView
-        x: page.sidePadding
+        x: 0
         y: divider.y + 14
-        width: page.width - page.sidePadding * 2
+        width: page.width
         height: page.height - y - page.bottomInset
+        leftMargin: page.sidePadding
+        rightMargin: page.sidePadding
+        readonly property real innerWidth: width - page.sidePadding * 2
+        cacheBuffer: 900
+        transform: Translate { id: searchShift }
         clip: true
         spacing: 2
         model: online.tracks
         boundsBehavior: Flickable.StopAtBounds
         property real modeFade: online.viewMode >= 1 ? 1 : 0
         Behavior on modeFade { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
-        opacity: modeFade * page.contentFade
+        opacity: modeFade
         visible: opacity > 0.01
         SmoothScroll { flickable: searchView; onScrolled: page.pinTop = false }
         onMovementStarted: page.pinTop = false
 
         header: Item {
-            width: searchView.width
+            width: searchView.innerWidth
             height: searchHead.height
 
             Column {
                 id: searchHead
                 width: parent.width
+                topPadding: 10
                 spacing: 0
-                // 头部一变高就回到顶部，否则结果出来时页面停在半空
-                onHeightChanged: Qt.callLater(page.rewind)
 
                 // ── 歌手 / 专辑 / 歌单 详情头 ──────────────────────────
                 Rectangle {
@@ -639,7 +753,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         width: 108; height: 108
                         radius: online.detailRound ? 54 : 10
-                        decodeSize: 256
+                        decodeSize: Math.ceil(108 * Math.max(1.0, Math.min(1.5, page.pxScale)))
                         source: online.detailCover
                     }
                     Column {
@@ -653,6 +767,7 @@ Item {
                             width: parent.width
                             text: online.detailTitle
                             color: Theme.text
+                            font.family: Theme.fontFamily
                             font.pixelSize: 24
                             font.weight: Font.Bold
                             elide: Text.ElideRight
@@ -662,6 +777,7 @@ Item {
                             visible: text.length > 0
                             text: online.detailSubtitle
                             color: Theme.textSecondary
+                            font.family: Theme.fontFamily
                             font.pixelSize: 13
                             elide: Text.ElideRight
                         }
@@ -669,15 +785,16 @@ Item {
                             width: parent.width
                             text: online.detailMeta
                             color: Theme.textTertiary
-                            font.pixelSize: 11
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
                             elide: Text.ElideRight
                         }
                         Row {
                             visible: online.viewMode === 4
                             spacing: 10
-                            topPadding: 2
+                            topPadding: 4
                             Rectangle {
-                                width: 92; height: 28; radius: 14
+                                width: 92; height: 30; radius: 15
                                 color: page.accent
                                 scale: playAllMouse.pressed ? 0.94 : (playAllMouse.containsMouse ? 1.04 : 1.0)
                                 Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
@@ -685,7 +802,8 @@ Item {
                                     anchors.centerIn: parent
                                     text: qsTr("播放全部")
                                     color: Theme.onAccent
-                                    font.pixelSize: 11
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 12
                                     font.weight: Font.DemiBold
                                 }
                                 MouseArea {
@@ -697,7 +815,7 @@ Item {
                                 }
                             }
                             Rectangle {
-                                width: 92; height: 28; radius: 14
+                                width: 92; height: 30; radius: 15
                                 color: dlAllMouse.containsMouse ? page.dim : "transparent"
                                 border.width: 1
                                 border.color: dlAllMouse.containsMouse ? Theme.accentAlpha(0.4) : Theme.hairline
@@ -706,7 +824,8 @@ Item {
                                     anchors.centerIn: parent
                                     text: qsTr("下载全部")
                                     color: Theme.textSecondary
-                                    font.pixelSize: 11
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 12
                                 }
                                 MouseArea {
                                     id: dlAllMouse
@@ -720,13 +839,13 @@ Item {
                     }
                 }
 
-                Item { width: 1; height: detailCard.visible ? 20 : 0 }
+                Item { width: 1; height: detailCard.visible ? 18 : 0 }
 
                 // 歌单工具条：排序 / 倒序 / 列表内筛选
                 Row {
                     width: parent.width
-                    height: visible ? 30 : 0
-                    spacing: 6
+                    height: visible ? 32 : 0
+                    spacing: 8
                     visible: online.viewMode === 4
 
                     Repeater {
@@ -735,8 +854,8 @@ Item {
                         delegate: Rectangle {
                             required property int index
                             required property var modelData
-                            width: 54; height: 28; radius: 14
-                            color: online.sortKey === modelData.k ? page.accentAlpha(0.16)
+                            width: 56; height: 30; radius: 15
+                            color: online.sortKey === modelData.k ? Theme.accentAlpha(0.16)
                                                                  : (sortMouse.containsMouse ? Theme.hover : "transparent")
                             border.width: 1
                             border.color: online.sortKey === modelData.k ? Theme.accentAlpha(0.5) : Theme.hairline
@@ -745,7 +864,8 @@ Item {
                                 anchors.centerIn: parent
                                 text: modelData.t
                                 color: online.sortKey === modelData.k ? Theme.accent : Theme.textSecondary
-                                font.pixelSize: 11
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 12
                             }
                             MouseArea {
                                 id: sortMouse
@@ -758,8 +878,8 @@ Item {
                     }
 
                     Rectangle {
-                        width: 66; height: 28; radius: 14
-                        color: online.sortDesc ? page.accentAlpha(0.16)
+                        width: 68; height: 30; radius: 15
+                        color: online.sortDesc ? Theme.accentAlpha(0.16)
                                                : (descMouse.containsMouse ? Theme.hover : "transparent")
                         border.width: 1
                         border.color: online.sortDesc ? Theme.accentAlpha(0.5) : Theme.hairline
@@ -768,7 +888,8 @@ Item {
                             anchors.centerIn: parent
                             text: online.sortDesc ? qsTr("↓ 倒序") : qsTr("↑ 正序")
                             color: online.sortDesc ? Theme.accent : Theme.textSecondary
-                            font.pixelSize: 11
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
                         }
                         MouseArea {
                             id: descMouse
@@ -780,27 +901,41 @@ Item {
                     }
 
                     Rectangle {
-                        width: 176; height: 28; radius: 14
+                        width: 184; height: 30; radius: 15
                         color: Theme.hover
                         border.width: 1
                         border.color: filterInput.activeFocus ? Theme.accentAlpha(0.5) : Theme.hairline
+                        Behavior on border.color { ColorAnimation { duration: Theme.fast } }
                         TextInput {
                             id: filterInput
                             anchors.fill: parent
                             anchors.leftMargin: 12
-                            anchors.rightMargin: 10
+                            anchors.rightMargin: filterClear.visible ? 26 : 12
                             verticalAlignment: TextInput.AlignVCenter
                             color: Theme.text
-                            font.pixelSize: 11
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 12
                             clip: true
                             onTextChanged: filterDebounce.restart()
                             Text {
                                 anchors.verticalCenter: parent.verticalCenter
                                 visible: filterInput.text.length === 0
-                                text: qsTr("在歌单里筛选")
+                                text: qsTr("筛选曲目")
                                 color: Theme.textTertiary
-                                font.pixelSize: 11
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 12
                             }
+                        }
+                        IconButton {
+                            id: filterClear
+                            anchors.right: parent.right
+                            anchors.rightMargin: 4
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 22; height: 22
+                            icon: "close"
+                            iconSize: 10
+                            visible: filterInput.text.length > 0
+                            onClicked: filterInput.text = ""
                         }
                         Timer {
                             id: filterDebounce
@@ -811,371 +946,549 @@ Item {
 
                     Text {
                         anchors.verticalCenter: parent.verticalCenter
-                        leftPadding: 6
+                        leftPadding: 4
+                        visible: online.filterText.length > 0
                         text: qsTr("%1 / %2").arg(online.tracks.length).arg(online.baseCount)
                         color: Theme.textTertiary
-                        font.pixelSize: 11
+                        font.family: Theme.fontFamily
+                        font.pixelSize: 12
                     }
                 }
 
                 Item { width: 1; height: online.viewMode === 4 ? 14 : 0 }
 
-                // ── 最佳匹配 ──────────────────────────────────────────
-                Rectangle {
-                    id: bestCard
-                    visible: online.viewMode === 1 && page.best !== null
-                    width: parent.width
-                    height: visible ? 132 : 0
-                    radius: 16
-                    color: bestMouse.containsMouse ? Theme.pressed : Theme.hover
-                    border.width: 1
-                    border.color: Theme.hairline
-                    Behavior on color { ColorAnimation { duration: Theme.fast } }
-
-                    SoftShadow { target: bestArt; spread: 16; offsetY: 8; strength: 0.5 }
-                    RoundedImage {
-                        id: bestArt
-                        x: 18
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 96; height: 96
-                        radius: 10
-                        decodeSize: 208
-                        source: online.albums.length > 0 ? online.albums[0].cover : ""
-                    }
-                    Column {
-                        anchors.left: bestArt.right
-                        anchors.leftMargin: 18
-                        anchors.right: bestActions.left
-                        anchors.rightMargin: 16
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 5
-                        Text {
-                            width: parent.width
-                            text: page.best ? page.best.title : ""
-                            color: Theme.text
-                            font.pixelSize: 21
-                            font.weight: Font.Bold
-                            elide: Text.ElideRight
-                        }
-                        Text {
-                            width: parent.width
-                            text: page.best
-                                  ? page.best.artist + (page.best.album.length ? " · " + page.best.album : "")
-                                  : ""
-                            color: Theme.textSecondary
-                            font.pixelSize: 12
-                            elide: Text.ElideRight
-                        }
-                        Text {
-                            width: parent.width
-                            text: page.best ? page.best.duration : ""
-                            color: Theme.textTertiary
-                            font.pixelSize: 11
-                        }
-                    }
-                    Row {
-                        id: bestActions
-                        anchors.right: parent.right
-                        anchors.rightMargin: 18
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 10
-                        Rectangle {
-                            width: 42; height: 42; radius: 21
-                            color: page.accent
-                            scale: bestPlay.pressed ? 0.92 : (bestPlay.containsMouse ? 1.05 : 1.0)
-                            Behavior on color { ColorAnimation { duration: Theme.normal } }
-                            Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
-                            Icon {
-                                anchors.centerIn: parent
-                                name: online.playing === 0 && player.playing ? "pause" : "play"
-                                size: 14
-                                tint: Theme.onAccent
-                            }
-                            MouseArea {
-                                id: bestPlay
-                                anchors.fill: parent
-                                hoverEnabled: !Theme.scrolling
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: online.playing === 0 ? player.toggle() : online.play(0)
-                            }
-                        }
-                        Rectangle {
-                            width: 42; height: 42; radius: 21
-                            color: bestDl.containsMouse ? page.dim : "transparent"
-                            scale: bestDl.pressed ? 0.92 : (bestDl.containsMouse ? 1.05 : 1.0)
-                            border.width: 1
-                            border.color: bestDl.containsMouse ? Theme.accentAlpha(0.4) : Theme.hairline
-                            Behavior on color { ColorAnimation { duration: Theme.fast } }
-                            Behavior on scale { NumberAnimation { duration: Theme.fast; easing.type: Easing.OutCubic } }
-                            Icon {
-                                anchors.centerIn: parent
-                                name: "import"
-                                size: 15
-                                opacity: 0.6
-                                tint: Theme.textSecondary
-                            }
-                            MouseArea {
-                                id: bestDl
-                                anchors.fill: parent
-                                hoverEnabled: !Theme.scrolling
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: online.download(0)
-                            }
-                        }
-                    }
-                    MouseArea {
-                        id: bestMouse
-                        anchors.fill: parent
-                        hoverEnabled: !Theme.scrolling
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: online.playing === 0 ? player.toggle() : online.play(0)
-                    }
-                }
-
-                // ── 歌手（胶囊，不再是大圆头像）────────────────────────
+                // ── 最佳匹配 + 歌手带（宽屏按 SearchPage 196px 并排，窄屏自动叠放）──
                 Item {
+                    id: heroBox
+                    visible: online.viewMode === 1 && (page.best !== null || online.artists.length > 0)
                     width: parent.width
-                    property bool want: online.viewMode === 1 && online.artists.length > 0
-                    visible: height > 0.5
-                    // 12 上边距 + 8 偏移 + 42 胶囊 + 8 下边距
-                    height: want ? 70 : 0
-                    Behavior on height { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                    readonly property bool wideHero: width >= 780
+                    readonly property int bestW: wideHero
+                                                 ? (online.artists.length > 0 ? Math.min(420, Math.round(width * 0.42)) : Math.min(540, width))
+                                                 : width
+                    readonly property int bestH: wideHero ? 196 : 132
+                    readonly property int artistH: wideHero ? 196 : (online.artists.length > 0 ? 54 : 0)
+                    height: !visible ? 0 : (wideHero
+                                            ? Math.max(page.best ? bestH : 0, online.artists.length > 0 ? artistH : 0)
+                                            : (page.best ? bestH : 0) + (page.best && online.artists.length > 0 ? 14 : 0) + artistH)
 
-                    ListView {
-                        id: artistStrip
-                        anchors.fill: parent
-                        orientation: ListView.Horizontal
-                        spacing: 10
-                        topMargin: 12
-                        clip: true
-                        boundsBehavior: Flickable.StopAtBounds
-                        model: online.artists
-                        SmoothScroll { flickable: artistStrip; horizontal: true }
-                        delegate: Rectangle {
-                            required property int index
-                            required property var modelData
-                            // 宽高都从内容算：头像 + 间距 + 文字，左右留白对称
-                            width: chipRow.implicitWidth
-                            height: 42
-                            radius: 21
-                            y: 8
-                            color: chipMouse.containsMouse ? page.faint : "transparent"
-                            border.width: 1
-                            border.color: Theme.hairline
-                            Behavior on color { ColorAnimation { duration: Theme.fast } }
-                            Row {
-                                id: chipRow
+                    Rectangle {
+                        id: bestCard
+                        visible: page.best !== null
+                        x: 0; y: 0
+                        width: heroBox.bestW
+                        height: heroBox.bestH
+                        radius: 18
+                        color: bestMouse.pressed ? Theme.pressed : (bestMouse.containsMouse ? Theme.pressed : Theme.hover)
+                        border.width: 1
+                        border.color: Theme.hairline
+                        Behavior on color { ColorAnimation { duration: Theme.fast } }
+
+                        SoftShadow { target: bestArt; spread: 16; offsetY: 8; strength: 0.5 }
+                        RoundedImage {
+                            id: bestArt
+                            x: 22
+                            y: heroBox.wideHero ? 22 : 18
+                            width: heroBox.wideHero ? 92 : 96
+                            height: heroBox.wideHero ? 92 : 96
+                            radius: 10
+                            decodeSize: Math.ceil(96 * Math.max(1.0, Math.min(1.5, page.pxScale)))
+                            source: online.bestCover || (page.best && page.best.cover ? page.best.cover : "")
+                            Icon {
                                 anchors.centerIn: parent
-                                // 左 6（贴住 30px 头像）、右 13：文字和头像之间留 11，
-                                // 原来 8 太挤，而且右留白比左多，文字看着被推向圆形
-                                spacing: 11
-                                leftPadding: 6
-                                rightPadding: 13
-                                Rectangle {
-                                    width: 30; height: 30; radius: 15
+                                name: "note"
+                                size: 28
+                                opacity: 0.28
+                                visible: bestArt.status !== Image.Ready
+                            }
+                        }
+
+                        // 宽屏 196px：与 SearchPage topCard 同构，文字沉底、右下浮现播放+下载
+                        Column {
+                            x: heroBox.wideHero ? 22 : bestArt.x + bestArt.width + 18
+                            anchors.bottom: heroBox.wideHero ? parent.bottom : undefined
+                            anchors.bottomMargin: heroBox.wideHero ? 20 : 0
+                            anchors.verticalCenter: heroBox.wideHero ? undefined : parent.verticalCenter
+                            width: heroBox.wideHero ? (parent.width - 44 - 102) : (parent.width - x - 114)
+                            spacing: 4
+
+                            Text {
+                                width: parent.width
+                                text: page.best
+                                      ? (online.keyword.length ? Nav.highlight(page.best.title, online.keyword, Theme.accent) : page.best.title)
+                                      : ""
+                                textFormat: page.best && online.keyword.length ? Text.StyledText : Text.PlainText
+                                color: Theme.text
+                                font.family: Theme.fontFamily
+                                font.pixelSize: heroBox.wideHero ? 23 : 20
+                                font.weight: Font.Bold
+                                elide: Text.ElideRight
+                            }
+                            Row {
+                                width: parent.width
+                                spacing: 6
+                                Icon {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    color: page.dim
-                                    Text {
-                                        anchors.centerIn: parent
-                                        text: modelData.name.charAt(0)
-                                        color: Theme.accent
-                                        font.pixelSize: 12
-                                        font.weight: Font.DemiBold
-                                    }
+                                    name: "note"
+                                    size: 13
+                                    opacity: 0.48
                                 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    // 不给宽度时 elide 是空操作，长名字会把胶囊撑到看不见头
-                                    width: Math.min(implicitWidth, 156)
-                                    text: modelData.name
-                                    color: chipMouse.containsMouse ? Theme.accent : Theme.text
-                                    font.pixelSize: 12
+                                    width: parent.width - 20
+                                    readonly property string subLine: page.best
+                                        ? (page.best.artist
+                                           + (page.best.album.length ? " · " + page.best.album : "")
+                                           + (page.best.duration.length ? " · " + page.best.duration : ""))
+                                        : ""
+                                    text: page.best && online.keyword.length
+                                          ? Nav.highlight(subLine, online.keyword, Theme.accent)
+                                          : subLine
+                                    textFormat: page.best && online.keyword.length ? Text.StyledText : Text.PlainText
+                                    color: Theme.textSecondary
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 13
                                     elide: Text.ElideRight
                                 }
                             }
-                            MouseArea {
-                                id: chipMouse
-                                anchors.fill: parent
-                                hoverEnabled: !Theme.scrolling
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: online.openArtist(modelData.id || "",
-                                                              modelData.name)
+                        }
+
+                        // 整卡点击区在操作按钮下方，防止挡住下载键
+                        MouseArea {
+                            id: bestMouse
+                            anchors.fill: parent
+                            hoverEnabled: !Theme.scrolling
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: online.playing === 0 ? player.toggle() : online.play(0)
+                        }
+
+                        Row {
+                            id: bestActions
+                            anchors.right: parent.right
+                            anchors.rightMargin: 18
+                            anchors.bottom: heroBox.wideHero ? parent.bottom : undefined
+                            anchors.bottomMargin: heroBox.wideHero ? 18 : 0
+                            anchors.verticalCenter: heroBox.wideHero ? undefined : parent.verticalCenter
+                            spacing: 8
+                            readonly property bool reveal: !heroBox.wideHero || bestMouse.containsMouse || bestPlay.containsMouse || bestDl.containsMouse || online.playing === 0 || online.pending === 0
+
+                            Rectangle {
+                                width: 34; height: 34; radius: 17
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: bestDl.containsMouse ? page.dim : Theme.hover
+                                border.width: 1
+                                border.color: bestDl.containsMouse ? Theme.accentAlpha(0.4) : Theme.hairline
+                                opacity: bestActions.reveal ? 1 : 0
+                                scale: bestDl.pressed ? 0.9 : (bestActions.reveal ? 1 : 0.85)
+                                Behavior on opacity { OpacityAnimator { duration: Theme.fast } }
+                                Behavior on scale { ScaleAnimator { duration: Theme.fast; easing.type: Easing.OutCubic } }
+                                Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                Icon {
+                                    anchors.centerIn: parent
+                                    name: "import"
+                                    size: 13
+                                    opacity: 0.78
+                                    tint: bestDl.containsMouse ? Theme.accent : Theme.textSecondary
+                                }
+                                MouseArea {
+                                    id: bestDl
+                                    anchors.fill: parent
+                                    hoverEnabled: !Theme.scrolling
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: online.download(0)
+                                }
+                            }
+
+                            Rectangle {
+                                width: heroBox.wideHero ? 48 : 42
+                                height: heroBox.wideHero ? 48 : 42
+                                radius: width / 2
+                                color: online.pending === 0 ? page.dim : page.accent
+                                opacity: bestActions.reveal ? 1 : 0
+                                scale: bestPlay.pressed ? 0.9 : (bestActions.reveal ? (bestPlay.containsMouse ? 1.06 : 1.0) : 0.8)
+                                Behavior on opacity { OpacityAnimator { duration: Theme.normal } }
+                                Behavior on scale { ScaleAnimator { duration: Theme.normal; easing.type: Easing.OutBack } }
+                                Behavior on color { ColorAnimation { duration: Theme.normal } }
+                                Icon {
+                                    anchors.centerIn: parent
+                                    visible: online.pending !== 0
+                                    name: online.playing === 0 && player.playing ? "pause" : "play"
+                                    size: heroBox.wideHero ? 16 : 14
+                                    tint: Theme.onAccent
+                                }
+                                Icon {
+                                    anchors.centerIn: parent
+                                    visible: online.pending === 0
+                                    name: "spinner"
+                                    size: 15
+                                    tint: page.accent
+                                    RotationAnimator on rotation {
+                                        running: online.pending === 0
+                                        loops: Animation.Infinite
+                                        from: 0; to: 360; duration: 800
+                                    }
+                                }
+                                MouseArea {
+                                    id: bestPlay
+                                    anchors.fill: parent
+                                    hoverEnabled: !Theme.scrolling
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: if (online.pending !== 0) (online.playing === 0 ? player.toggle() : online.play(0))
+                                }
+                            }
+                        }
+                    }
+
+                    // ── 歌手横向带（宽屏大圆头像与 SearchPage 同构；窄屏退化为胶囊）──
+                    Item {
+                        id: artistHost
+                        visible: online.artists.length > 0
+                        x: heroBox.wideHero && bestCard.visible ? bestCard.width + 28 : 0
+                        y: heroBox.wideHero ? 0 : (bestCard.visible ? bestCard.height + 14 : 0)
+                        width: parent.width - x
+                        height: heroBox.artistH
+
+                        HoverHandler { id: artistHover }
+                        StripArrows { targetView: artistStrip; scroller: artistScroller; hostHovered: artistHover.hovered }
+
+                        ListView {
+                            id: artistStrip
+                            anchors.fill: parent
+                            orientation: ListView.Horizontal
+                            spacing: heroBox.wideHero ? 18 : 10
+                            clip: true
+                            boundsBehavior: Flickable.StopAtBounds
+                            model: online.artists
+                            SmoothScroll { id: artistScroller; flickable: artistStrip; horizontal: true; horizontalWheelOnly: true }
+
+                            delegate: Item {
+                                required property int index
+                                required property var modelData
+                                readonly property bool wide: heroBox.wideHero
+                                readonly property bool hovered: artistMouse.containsMouse
+                                width: wide ? 116 : chipContent.implicitWidth
+                                height: wide ? artistStrip.height : 42
+                                y: wide ? 0 : 6
+
+                                // 宽屏样式：圆形头像/首字母圆徽 + 居中名字
+                                Item {
+                                    id: avatarBox
+                                    visible: wide
+                                    x: 0
+                                    y: 20 + (hovered ? -3 : 0)
+                                    width: 116; height: 116
+                                    Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+
+                                    SoftShadow {
+                                        target: avatarImg
+                                        visible: (modelData.cover || "").length > 0
+                                        spread: 14; offsetY: 8; strength: hovered ? 0.85 : 0.4
+                                    }
+                                    RoundedImage {
+                                        id: avatarImg
+                                        anchors.fill: parent
+                                        visible: (modelData.cover || "").length > 0
+                                        radius: 58
+                                        decodeSize: Math.ceil(116 * Math.max(1.0, Math.min(1.5, page.pxScale)))
+                                        source: modelData.cover || ""
+                                    }
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        visible: (modelData.cover || "").length === 0
+                                        radius: 58
+                                        color: hovered ? Theme.accentAlpha(0.16) : Theme.accentAlpha(0.09)
+                                        border.width: 1
+                                        border.color: hovered ? Theme.accentAlpha(0.45) : Theme.hairline
+                                        Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                        Behavior on border.color { ColorAnimation { duration: Theme.fast } }
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: modelData.name ? modelData.name.charAt(0) : ""
+                                            color: Theme.accent
+                                            font.family: Theme.fontFamily
+                                            font.pixelSize: 34
+                                            font.weight: Font.DemiBold
+                                        }
+                                    }
+                                }
+                                Text {
+                                    visible: wide
+                                    y: 148
+                                    width: parent.width
+                                    horizontalAlignment: Text.AlignHCenter
+                                    text: online.keyword.length ? Nav.highlight(modelData.name, online.keyword, Theme.accent) : modelData.name
+                                    textFormat: online.keyword.length ? Text.StyledText : Text.PlainText
+                                    elide: Text.ElideRight
+                                    color: hovered ? Theme.accent : Theme.textSecondary
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                    Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                }
+
+                                // 窄屏降级：对称胶囊
+                                Rectangle {
+                                    visible: !wide
+                                    anchors.fill: parent
+                                    radius: 21
+                                    color: hovered ? page.faint : Theme.hover
+                                    border.width: 1
+                                    border.color: hovered ? Theme.accentAlpha(0.4) : Theme.hairline
+                                    Behavior on color { ColorAnimation { duration: Theme.fast } }
+                                    Row {
+                                        id: chipContent
+                                        anchors.centerIn: parent
+                                        spacing: 10
+                                        leftPadding: 6
+                                        rightPadding: 14
+                                        Rectangle {
+                                            width: 30; height: 30; radius: 15
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            color: page.dim
+                                            RoundedImage {
+                                                anchors.fill: parent
+                                                visible: (modelData.cover || "").length > 0
+                                                radius: 15
+                                                decodeSize: 64
+                                                source: modelData.cover || ""
+                                            }
+                                            Text {
+                                                anchors.centerIn: parent
+                                                visible: (modelData.cover || "").length === 0
+                                                text: modelData.name ? modelData.name.charAt(0) : ""
+                                                color: Theme.accent
+                                                font.family: Theme.fontFamily
+                                                font.pixelSize: 12
+                                                font.weight: Font.DemiBold
+                                            }
+                                        }
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: Math.min(implicitWidth, 148)
+                                            text: online.keyword.length ? Nav.highlight(modelData.name, online.keyword, Theme.accent) : modelData.name
+                                            textFormat: online.keyword.length ? Text.StyledText : Text.PlainText
+                                            color: hovered ? Theme.accent : Theme.text
+                                            font.family: Theme.fontFamily
+                                            font.pixelSize: 12
+                                            elide: Text.ElideRight
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: artistMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: !Theme.scrolling
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: online.openArtist(modelData.id || "", modelData.name)
+                                }
                             }
                         }
                     }
                 }
 
                 // ── 歌单带 ────────────────────────────────────────────
+                Item { width: 1; height: online.viewMode === 1 && online.playlists.length > 0 ? 26 : 0 }
                 Marker {
                     want: online.viewMode === 1 && online.playlists.length > 0
                     icon: "playlist"
                     count: online.playlists.length
                 }
-                ListView {
-                    id: playlistStrip
+                Item { width: 1; height: online.viewMode === 1 && online.playlists.length > 0 ? 10 : 0 }
+                Item {
+                    id: plHost
+                    visible: online.viewMode === 1 && online.playlists.length > 0
                     width: parent.width
-                    property bool want: online.viewMode === 1 && online.playlists.length > 0
-                    visible: height > 0.5
-                    height: want ? 232 : 0
-                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-                    orientation: ListView.Horizontal
-                    spacing: 18
-                    clip: true
-                    boundsBehavior: Flickable.StopAtBounds
-                    model: online.playlists
-                    SmoothScroll { flickable: playlistStrip; horizontal: true }
-                    delegate: Item {
-                        required property int index
-                        required property var modelData
-                        width: 168
-                        height: 232
-                        readonly property bool hovered: plMouse.containsMouse
+                    height: visible ? 228 : 0
+                    HoverHandler { id: plHover }
+                    StripArrows { targetView: playlistStrip; scroller: plScroller; hostHovered: plHover.hovered }
 
-                        Item {
-                            width: 168
-                            height: 168
-                            y: parent.hovered ? -3 : 0
-                            Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+                    ListView {
+                        id: playlistStrip
+                        anchors.fill: parent
+                        orientation: ListView.Horizontal
+                        spacing: 20
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: online.playlists
+                        SmoothScroll { id: plScroller; flickable: playlistStrip; horizontal: true; horizontalWheelOnly: true }
+                        delegate: Item {
+                            required property int index
+                            required property var modelData
+                            width: 156
+                            height: 228
+                            readonly property bool hovered: plMouse.containsMouse
 
-                            RoundedImage {
-                                anchors.fill: parent
-                                radius: 10
-                                decodeSize: 336
-                                source: modelData.cover
-                            }
-                            // 底部暗角 + 播放量：和 B 站那种"封面右下角带数字"的读法一致
-                            Rectangle {
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.bottom: parent.bottom
-                                height: 52
-                                radius: 10
-                                gradient: Gradient {
-                                    GradientStop { position: 0.0; color: "transparent" }
-                                    GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.58) }
+                            SoftShadow { target: plCoverBox; spread: 16; offsetY: 8; strength: parent.hovered ? 0.85 : 0.45 }
+                            Item {
+                                id: plCoverBox
+                                width: 156
+                                height: 156
+                                y: parent.hovered ? -3 : 0
+                                Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+
+                                RoundedImage {
+                                    anchors.fill: parent
+                                    radius: 8
+                                    decodeSize: Math.ceil(156 * Math.max(1.0, Math.min(1.5, page.pxScale)))
+                                    source: modelData.cover
+                                }
+                                Rectangle {
+                                    anchors.left: parent.left
+                                    anchors.right: parent.right
+                                    anchors.bottom: parent.bottom
+                                    height: 46
+                                    radius: 8
+                                    visible: modelData.playCount > 0
+                                    gradient: Gradient {
+                                        GradientStop { position: 0.0; color: "transparent" }
+                                        GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.56) }
+                                    }
+                                }
+                                Row {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 10
+                                    anchors.bottom: parent.bottom
+                                    anchors.bottomMargin: 8
+                                    spacing: 4
+                                    visible: modelData.playCount > 0
+                                    Icon {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        name: "play"
+                                        size: 9
+                                        tint: "white"
+                                        opacity: 0.88
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: page.fmtCount(modelData.playCount)
+                                        color: "white"
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: 11
+                                    }
                                 }
                             }
-                            Row {
-                                anchors.left: parent.left
-                                anchors.leftMargin: 10
-                                anchors.bottom: parent.bottom
-                                anchors.bottomMargin: 8
-                                spacing: 4
-                                Icon {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    name: "play"
-                                    size: 9
-                                    tint: "white"
-                                    opacity: 0.85
+
+                            Column {
+                                y: 164
+                                width: parent.width
+                                spacing: 3
+                                Text {
+                                    width: parent.width
+                                    text: online.keyword.length ? Nav.highlight(modelData.name, online.keyword, Theme.accent) : modelData.name
+                                    textFormat: online.keyword.length ? Text.StyledText : Text.PlainText
+                                    color: plMouse.containsMouse ? Theme.accent : Theme.text
+                                    font.family: Theme.fontFamily
+                                    font.pixelSize: 13
+                                    font.weight: Font.DemiBold
+                                    lineHeight: 1.2
+                                    wrapMode: Text.Wrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
                                 }
                                 Text {
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: page.fmtCount(modelData.playCount)
-                                    color: "white"
+                                    width: parent.width
+                                    readonly property string plSub: (modelData.creator && modelData.creator.length ? modelData.creator + " · " : "")
+                                                                  + qsTr("%1 首").arg(modelData.count)
+                                    text: plSub
+                                    color: Theme.textTertiary
+                                    font.family: Theme.fontFamily
                                     font.pixelSize: 11
+                                    elide: Text.ElideRight
                                 }
                             }
-                        }
-
-                        Text {
-                            y: 176
-                            width: parent.width
-                            text: modelData.name
-                            color: parent.hovered ? Theme.accent : Theme.text
-                            font.pixelSize: 13
-                            font.weight: Font.DemiBold
-                            lineHeight: 1.25
-                            wrapMode: Text.Wrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
-                        }
-                        Text {
-                            y: 216
-                            width: parent.width
-                            text: qsTr("%1 首").arg(modelData.count)
-                            color: Theme.textTertiary
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
-                        }
-                        MouseArea {
-                            id: plMouse
-                            anchors.fill: parent
-                            hoverEnabled: !Theme.scrolling
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: online.openPlaylist(modelData.id || "",
-                                                           modelData.name)
+                            MouseArea {
+                                id: plMouse
+                                anchors.fill: parent
+                                hoverEnabled: !Theme.scrolling
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: online.openPlaylist(modelData.id || "", modelData.name)
+                            }
                         }
                     }
                 }
 
-                // ── 专辑带 ────────────────────────────────────────────
+                // ── 专辑带（规格对齐 AlbumStrip.qml：150px 封面 + SoftShadow + 8px 圆角）──
+                Item { width: 1; height: online.viewMode === 1 && online.albums.length > 0 ? 26 : 0 }
                 Marker {
                     want: online.viewMode === 1 && online.albums.length > 0
                     icon: "album-open"
                     count: online.albums.length
                 }
-                ListView {
-                    id: albumStrip
+                Item { width: 1; height: online.viewMode === 1 && online.albums.length > 0 ? 10 : 0 }
+                Item {
+                    id: albHost
+                    visible: online.viewMode === 1 && online.albums.length > 0
                     width: parent.width
-                    property bool want: online.viewMode === 1 && online.albums.length > 0
-                    visible: height > 0.5
-                    height: want ? 208 : 0
-                    Behavior on height { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
-                    orientation: ListView.Horizontal
-                    spacing: 22
-                    clip: true
-                    boundsBehavior: Flickable.StopAtBounds
-                    model: online.albums
-                    SmoothScroll { flickable: albumStrip; horizontal: true }
-                    delegate: Item {
-                        required property int index
-                        required property var modelData
-                        width: 150
-                        height: 208
-                        readonly property bool hovered: albMouse.containsMouse
-                        RoundedImage {
-                            width: 150; height: 150
-                            radius: 8
-                            y: parent.hovered ? -3 : 0
-                            decodeSize: 300
-                            source: modelData.cover
-                            Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
-                        }
-                        Text {
-                            y: 160
-                            width: parent.width
-                            text: modelData.name
-                            color: parent.hovered ? Theme.accent : Theme.text
-                            font.pixelSize: 13
-                            font.weight: Font.DemiBold
-                            elide: Text.ElideRight
-                        }
-                        Text {
-                            y: 180
-                            width: parent.width
-                            text: modelData.artist
-                            color: Theme.textTertiary
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
-                        }
-                        MouseArea {
-                            id: albMouse
-                            anchors.fill: parent
-                            hoverEnabled: !Theme.scrolling
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: online.openAlbum(modelData.id || "",
-                                                        modelData.name)
+                    height: visible ? 212 : 0
+                    HoverHandler { id: albHover }
+                    StripArrows { targetView: albumStrip; scroller: albScroller; hostHovered: albHover.hovered }
+
+                    ListView {
+                        id: albumStrip
+                        anchors.fill: parent
+                        orientation: ListView.Horizontal
+                        spacing: 22
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: online.albums
+                        SmoothScroll { id: albScroller; flickable: albumStrip; horizontal: true; horizontalWheelOnly: true }
+                        delegate: Item {
+                            required property int index
+                            required property var modelData
+                            width: 150
+                            height: 212
+                            readonly property bool hovered: albMouse.containsMouse
+
+                            SoftShadow { target: albArt; spread: 16; offsetY: 8; strength: parent.hovered ? 0.85 : 0.45 }
+                            RoundedImage {
+                                id: albArt
+                                width: 150; height: 150
+                                radius: 8
+                                y: parent.hovered ? -3 : 0
+                                decodeSize: Math.ceil(150 * Math.max(1.0, Math.min(1.5, page.pxScale)))
+                                source: modelData.cover
+                                Behavior on y { NumberAnimation { duration: Theme.normal; easing.type: Easing.OutCubic } }
+                            }
+                            Text {
+                                y: 160
+                                width: parent.width
+                                text: online.keyword.length ? Nav.highlight(modelData.name, online.keyword, Theme.accent) : modelData.name
+                                textFormat: online.keyword.length ? Text.StyledText : Text.PlainText
+                                color: parent.hovered ? Theme.accent : Theme.text
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                y: 180
+                                width: parent.width
+                                text: modelData.artist
+                                color: Theme.textTertiary
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
+                            MouseArea {
+                                id: albMouse
+                                anchors.fill: parent
+                                hoverEnabled: !Theme.scrolling
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: online.openAlbum(modelData.id || "", modelData.name)
+                            }
                         }
                     }
                 }
 
                 // ── 歌曲 ──────────────────────────────────────────────
+                Item { width: 1; height: online.tracks.length > 0 ? 24 : 0 }
                 Marker {
                     want: online.tracks.length > 0
                     icon: "note"
                     count: online.tracks.length
                 }
-                Item { width: 1; height: 6 }
+                Item { width: 1; height: online.tracks.length > 0 ? 6 : 0 }
             }
         }
 
@@ -1183,37 +1496,49 @@ Item {
             required property int index
             required property var modelData
             rowIndex: index
-            width: searchView.width
+            width: searchView.innerWidth
             title: modelData.title
-            subtitle: modelData.artist + (modelData.album.length ? " · " + modelData.album : "")
+            artist: modelData.artist || ""
+            album: modelData.album || ""
+            showAlbum: online.viewMode !== 3
+            highlight: online.viewMode === 1 ? online.keyword : online.filterText
+            keyFocus: page.sel === index
             duration: modelData.duration
             paywalled: modelData.paywalled
             active: online.playing === index
             playing: online.playing === index && player.playing
             pending: online.pending === index
             accent: page.accent
+            fav: playlists.revision >= 0 && playlists.isFavoriteOnline(online.trackMeta(index).onlineKey || "")
             onPlayed: online.playing === index ? player.toggle() : online.play(index)
             onDownloaded: online.download(index)
+            onFavorited: playlists.toggleFavoriteOnline(online.trackMeta(index))
+            onMenuRequested: (px, py) => {
+                const m = online.trackMeta(index)
+                const p = mapToItem(null, px, py)
+                Nav.trackMenu(-1, p.x, p.y, { isOnline: true, onlineKey: m.onlineKey || "", onlineMeta: m, play: () => (online.playing === index ? player.toggle() : online.play(index)) })
+            }
         }
 
         footer: Item {
-            width: searchView.width
-            height: online.canLoadMore ? 54 : 12
+            width: searchView.innerWidth
+            height: online.canLoadMore ? 56 : 12
             Rectangle {
                 visible: online.canLoadMore
                 width: 132; height: 32; radius: 16
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.top: parent.top
-                anchors.topMargin: 6
-                color: moreMouse.containsMouse ? page.dim : "transparent"
+                anchors.topMargin: 8
+                color: moreMouse.pressed ? Theme.pressed : (moreMouse.containsMouse ? page.dim : "transparent")
                 border.width: 1
-                border.color: Theme.hairline
+                border.color: moreMouse.containsMouse ? Theme.accentAlpha(0.45) : Theme.hairline
                 Behavior on color { ColorAnimation { duration: Theme.fast } }
                 Text {
                     anchors.centerIn: parent
                     text: qsTr("加载更多")
                     color: Theme.textSecondary
-                    font.pixelSize: 11
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
                 }
                 MouseArea {
                     id: moreMouse
@@ -1226,24 +1551,41 @@ Item {
         }
     }
 
-    Text {
+    // 无结果空态（对齐 SearchPage 的图标 + 提示布局）
+    Column {
         anchors.centerIn: searchView
-        visible: online.isSearch && online.tracks.length === 0 && !online.busy
-        text: online.keyword.length > 0 ? qsTr("没有找到，换个关键词试试") : ""
-        color: Theme.textTertiary
-        font.pixelSize: 12
+        spacing: 12
+        visible: online.isSearch && online.tracks.length === 0 && !online.busy && online.keyword.length > 0
+        Icon {
+            anchors.horizontalCenter: parent.horizontalCenter
+            name: "search"
+            size: 48
+            opacity: 0.14
+        }
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: qsTr("没有找到与「%1」相关的结果").arg(online.keyword)
+            color: Theme.textTertiary
+            font.family: Theme.fontFamily
+            font.pixelSize: 13
+        }
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            text: qsTr("可以检查拼写，或切换上方音乐源重试")
+            color: Theme.textTertiary
+            font.family: Theme.fontFamily
+            font.pixelSize: 12
+            opacity: 0.75
+        }
     }
 
-    // ── 骨架屏：等网络时给个形状 ────────────────────────────────────
-    //
-    // 站位和 TrackLine 对齐：序号位 / 歌名 / 歌手·专辑 / 时长 / 两个按钮。
-    // 进出都走淡入淡出（外层管显隐，内层管呼吸），避免"啪"地消失。
+    // ── 骨架屏：按当前视图形态占位（搜索态模仿 Hero + 歌手圆 + 列表）──────────
     Item {
         id: skeleton
         x: online.viewMode === 0 ? trackArea.x : page.sidePadding
         y: divider.y + 14
         width: online.viewMode === 0 ? trackArea.width : page.width - page.sidePadding * 2
-        height: Math.min(page.height - y - page.bottomInset, 8 * 48)
+        height: page.height - y - page.bottomInset
         property bool want: online.busy && online.tracks.length === 0
         visible: opacity > 0.01
         opacity: 0
@@ -1257,7 +1599,6 @@ Item {
             anchors.fill: parent
             SequentialAnimation on opacity {
                 running: skeleton.want
-                // 停下来时回到 1：否则下次从 0.45/0.9 的随机值续跑，亮度会跳
                 onRunningChanged: if (!running) breath.opacity = 1
                 loops: Animation.Infinite
                 NumberAnimation { to: 0.45; duration: 700; easing.type: Easing.InOutSine }
@@ -1266,49 +1607,111 @@ Item {
 
             Column {
                 width: parent.width
-                spacing: 2
-                Repeater {
-                    model: 8
-                    delegate: Item {
-                        required property int index
-                        width: skeleton.width
-                        height: 46
+                topPadding: online.viewMode >= 1 ? 10 : 0
+                spacing: 0
 
+                // 搜索/详情顶部卡片骨架
+                Row {
+                    visible: online.viewMode === 1
+                    width: parent.width
+                    height: visible ? (skeleton.width >= 780 ? 196 : 132) : 0
+                    spacing: 28
+                    Rectangle {
+                        width: skeleton.width >= 780 ? Math.min(420, Math.round(skeleton.width * 0.42)) : skeleton.width
+                        height: parent.height
+                        radius: 18
+                        color: Qt.rgba(1, 1, 1, 0.04)
                         Rectangle {
-                            x: 19
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 12; height: 8; radius: 4
-                            color: Qt.rgba(1, 1, 1, 0.032)
-                        }
-                        Column {
-                            x: 44
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 7
-                            Rectangle {
-                                width: Math.min(skeleton.width * 0.32, 150 + (index % 3) * 54)
-                                height: 9; radius: 4.5
-                                color: Qt.rgba(1, 1, 1, 0.055)
-                            }
-                            Rectangle {
-                                width: Math.min(skeleton.width * 0.2, 88 + (index % 2) * 46)
-                                height: 8; radius: 4
-                                color: Qt.rgba(1, 1, 1, 0.03)
-                            }
+                            x: 22; y: 22
+                            width: skeleton.width >= 780 ? 92 : 84
+                            height: width; radius: 10
+                            color: Qt.rgba(1, 1, 1, 0.05)
                         }
                         Rectangle {
-                            x: parent.width - 132
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 26; height: 8; radius: 4
-                            color: Qt.rgba(1, 1, 1, 0.028)
+                            x: skeleton.width >= 780 ? 22 : 124
+                            y: skeleton.width >= 780 ? parent.height - 54 : 38
+                            width: Math.min(parent.width * 0.52, 200)
+                            height: 14; radius: 7
+                            color: Qt.rgba(1, 1, 1, 0.06)
                         }
+                        Rectangle {
+                            x: skeleton.width >= 780 ? 22 : 124
+                            y: skeleton.width >= 780 ? parent.height - 32 : 64
+                            width: Math.min(parent.width * 0.36, 130)
+                            height: 10; radius: 5
+                            color: Qt.rgba(1, 1, 1, 0.035)
+                        }
+                    }
+                    Row {
+                        visible: skeleton.width >= 780
+                        spacing: 18
                         Repeater {
-                            model: 2
-                            delegate: Rectangle {
-                                required property int index
-                                x: parent.width - 82 + index * 34
+                            model: 4
+                            delegate: Column {
+                                width: 116
+                                topPadding: 20
+                                spacing: 12
+                                Rectangle { width: 116; height: 116; radius: 58; color: Qt.rgba(1, 1, 1, 0.04) }
+                                Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: 64; height: 10; radius: 5; color: Qt.rgba(1, 1, 1, 0.04) }
+                            }
+                        }
+                    }
+                }
+                Rectangle {
+                    visible: online.isDetail
+                    width: parent.width
+                    height: visible ? 156 : 0
+                    radius: 18
+                    color: Qt.rgba(1, 1, 1, 0.04)
+                }
+                Item { width: 1; height: online.viewMode >= 1 ? 26 : 0 }
+
+                Column {
+                    width: parent.width
+                    spacing: 2
+                    Repeater {
+                        model: online.viewMode >= 1 ? 6 : 8
+                        delegate: Item {
+                            required property int index
+                            width: skeleton.width
+                            height: 52
+
+                            Rectangle {
+                                x: 19
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: 28; height: 28; radius: 14
-                                color: Qt.rgba(1, 1, 1, 0.026)
+                                width: 12; height: 8; radius: 4
+                                color: Qt.rgba(1, 1, 1, 0.032)
+                            }
+                            Column {
+                                x: 46
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 7
+                                Rectangle {
+                                    width: Math.min(skeleton.width * 0.32, 150 + (index % 3) * 54)
+                                    height: 10; radius: 5
+                                    color: Qt.rgba(1, 1, 1, 0.055)
+                                }
+                                Rectangle {
+                                    width: Math.min(skeleton.width * 0.2, 88 + (index % 2) * 46)
+                                    height: 8; radius: 4
+                                    color: Qt.rgba(1, 1, 1, 0.03)
+                                }
+                            }
+                            Rectangle {
+                                x: parent.width - 132
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 26; height: 8; radius: 4
+                                color: Qt.rgba(1, 1, 1, 0.028)
+                            }
+                            Repeater {
+                                model: 2
+                                delegate: Rectangle {
+                                    required property int index
+                                    x: parent.width - 82 + index * 34
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 28; height: 28; radius: 14
+                                    color: Qt.rgba(1, 1, 1, 0.026)
+                                }
                             }
                         }
                     }

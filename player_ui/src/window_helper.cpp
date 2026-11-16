@@ -192,3 +192,21 @@ double WindowHelper::refreshRate(QWindow* window) const {
     const double hz = s ? s->refreshRate() : 0.0;
     return hz >= 24.0 && hz <= 500.0 ? hz : 60.0;
 }
+
+void WindowHelper::setClickThrough(QWindow* window, bool on) {
+#ifdef Q_OS_WIN
+    if (!window) return;
+    HWND hwnd = reinterpret_cast<HWND>(window->winId());
+    if (!hwnd) return;
+    LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    const LONG_PTR next = on ? (ex | WS_EX_TRANSPARENT) : (ex & ~WS_EX_TRANSPARENT);
+    if (next != ex) {
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
+#else
+    Q_UNUSED(window);
+    Q_UNUSED(on);
+#endif
+}
