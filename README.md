@@ -1,6 +1,12 @@
-# Shiyu Player
+<p align="center">
+  <img src="player_ui/images/app_icon_256.png" width="96" alt="Shiyu Player" />
+</p>
 
-基于 **C++17** 与 **Qt 6 Quick (QML)** 开发的 Windows 本地/在线音频播放器（CMake 工程名 `KugouPlayer`）。
+<h1 align="center">Shiyu Player</h1>
+
+<p align="center">
+  基于 <strong>C++17</strong> 与 <strong>Qt 6 Quick (QML)</strong> 开发的 Windows 本地/在线音频播放器（CMake 工程名 <code>KugouPlayer</code>）。
+</p>
 
 ## 界面预览
 
