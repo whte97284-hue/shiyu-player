@@ -2,6 +2,14 @@
 
 基于 **C++17** 与 **Qt 6 Quick (QML)** 开发的 Windows 本地/在线音频播放器（CMake 工程名 `KugouPlayer`）。
 
+## 界面预览
+
+| 专辑墙 | 正在播放 |
+| :---: | :---: |
+| ![专辑墙](docs/screenshots/albums.png) | ![正在播放](docs/screenshots/now_playing.png) |
+| **歌曲列表** | **本地搜索** |
+| ![歌曲列表](docs/screenshots/songs.png) | ![本地搜索](docs/screenshots/search.png) |
+
 ## 主要功能
 
 - **本地曲库管理**：目录扫描与增量缓存、文件夹实时监听、拼音索引、CUE 分轨解析、曲库整理与去重
